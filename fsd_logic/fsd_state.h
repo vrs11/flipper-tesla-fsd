@@ -13,6 +13,27 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+typedef enum {
+    TestAction_None = 0,
+    TestAction_ShiftFullPress,
+    TestAction_ShiftFullDoublePress,
+    TestAction_RightWheelShort,
+    TestAction_RightWheelBurst,
+    TestAction_SetCruise40,
+    TestAction_EnableAp,
+    TestAction_GearUpHalf,
+    TestAction_GearUpFull,
+    TestAction_GearDownHalf,
+    TestAction_GearDownFull,
+} TestActionRequest;
+
+typedef enum {
+    SpeedLimitSource_None = 0,
+    SpeedLimitSource_Map,
+    SpeedLimitSource_Vision,
+    SpeedLimitSource_Acc,
+} SpeedLimitSource;
+
 typedef struct FSDState {
     TeslaHWVersion hw_version;
     int speed_profile;
@@ -183,6 +204,8 @@ typedef struct FSDState {
     // Wi-Fi (ESP32 web dashboard)
     char wifi_ssid[33];          // max 32 chars + null
     char wifi_pass[65];          // max 64 chars + null
+    char wifi_sta_ssid[33];      // optional station SSID
+    char wifi_sta_pass[65];      // optional station password
     bool wifi_hidden;
 
     // 2026.14.x firmware warning (persisted in NVS on ESP32)
@@ -194,6 +217,39 @@ typedef struct FSDState {
     uint8_t das_lane_change_state;
     uint8_t das_counter;
     uint8_t das_checksum;
+
+    // Temporary action-test dashboard state (ESP32 road-test diagnostics)
+    uint32_t turn_down_light_ms;
+    uint32_t turn_down_hard_ms;
+    uint32_t turn_up_light_ms;
+    uint32_t turn_up_hard_ms;
+    uint32_t stalk_full_up_ms;
+    uint32_t stalk_full_down_ms;
+    uint32_t stalk_light_up_ms;
+    uint32_t stalk_light_down_ms;
+    uint8_t stalk_action_last_code;
+    bool stalk_action_seen;
+    uint32_t wheel_up_ms;
+    uint32_t wheel_down_ms;
+    uint32_t wheel_up_burst_ms;
+    uint32_t wheel_down_burst_ms;
+    bool ap_ready;
+    bool cruise_set_speed_seen;
+    float cruise_set_speed_kph;
+    bool speed_limit_seen;
+    float speed_limit_kph;
+    SpeedLimitSource speed_limit_source;
+    uint32_t speed_limit_last_ms;
+    bool left_turn_active;
+    bool right_turn_active;
+    bool left_turn_status_seen;
+    bool right_turn_status_seen;
+    bool turn_status_seen;
+    float map_speed_limit_kph;
+    float vision_speed_limit_kph;
+    float acc_speed_limit_kph;
+    TestActionRequest test_action_request;
+    uint32_t test_action_seq;
 
     // T-Display (ESP32 BOARD_TTGO_DISPLAY); kept unconditionally so the struct
     // layout is identical across boards.

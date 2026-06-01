@@ -26,6 +26,7 @@ class TwaiDriver : public CanDriver {
     bool     listen_only_ = false;
     bool     installed_   = false;
     uint32_t tx_count_    = 0;
+    uint32_t rx_count_    = 0;
 
     bool install_and_start(bool listen_only) {
         twai_general_config_t g = TWAI_GENERAL_CONFIG_DEFAULT(
@@ -88,6 +89,7 @@ public:
         frame.id  = msg.identifier;
         frame.dlc = msg.data_length_code;
         memcpy(frame.data, msg.data, frame.dlc);
+        rx_count_++;
         return true;
     }
 
@@ -98,6 +100,8 @@ public:
     }
 
     uint32_t txCount() override { return tx_count_; }
+
+    uint32_t rxCount() override { return rx_count_; }
 
     void setListenOnly(bool enable) override {
         if (listen_only_ == enable) return;
@@ -141,6 +145,7 @@ class Mcp2515Driver : public CanDriver {
     bool     chip_detected_ = false;
     uint32_t err_count_    = 0;
     uint32_t tx_count_     = 0;
+    uint32_t rx_count_     = 0;
 
 public:
 #if defined(BOARD_TTGO_DISPLAY)
@@ -253,6 +258,7 @@ public:
         frame.id  = f.can_id & CAN_EFF_MASK;
         frame.dlc = f.can_dlc;
         memcpy(frame.data, f.data, f.can_dlc);
+        rx_count_++;
         return true;
     }
 
@@ -261,6 +267,8 @@ public:
     }
 
     uint32_t txCount() override { return tx_count_; }
+
+    uint32_t rxCount() override { return rx_count_; }
 
     void setListenOnly(bool enable) override {
         if (!installed_ || listen_only_ == enable) return;

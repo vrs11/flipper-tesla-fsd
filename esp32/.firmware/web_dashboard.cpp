@@ -140,6 +140,30 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
 .card{background:var(--card);border-radius:16px;padding:16px;
   margin-bottom:12px;border:1px solid var(--border)}
 .card-head{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+.config-section{background:var(--card);border:1px solid var(--border);
+  border-radius:16px;margin-bottom:12px;overflow:hidden}
+.config-section summary{display:flex;align-items:center;gap:8px;list-style:none;
+  padding:16px;cursor:pointer;user-select:none}
+.config-section summary::-webkit-details-marker{display:none}
+.config-section summary:after{content:"";margin-left:auto;width:9px;height:9px;
+  border-right:2px solid var(--text2);border-bottom:2px solid var(--text2);
+  transform:rotate(45deg);transition:transform .2s}
+.config-section[open] summary:after{transform:rotate(225deg)}
+.config-section .config-body{padding:0 12px 12px}
+.config-section .card{border-radius:12px;margin-bottom:10px}
+.config-section .card:last-child{margin-bottom:0}
+.controls-fold{margin-top:10px;border-top:1px solid rgba(255,255,255,.04)}
+.controls-fold summary{position:relative;display:block;list-style:none;
+  padding:10px 28px 0 0;cursor:pointer;user-select:none;min-height:24px}
+.controls-fold summary::-webkit-details-marker{display:none}
+.controls-fold summary:after{content:"";position:absolute;right:4px;top:12px;width:9px;height:9px;
+  border-right:2px solid var(--text2);border-bottom:2px solid var(--text2);
+  transform:rotate(45deg);transition:transform .2s}
+.controls-fold[open] summary:after{transform:rotate(225deg);top:16px}
+.controls-fold[open] .control-summary{display:none}
+.control-summary{color:var(--text2);font-size:.76em;
+  display:block;max-width:calc(100% - 8px);white-space:normal;line-height:1.35;padding-right:8px}
+.controls-body{padding-top:8px}
 .icon{width:28px;height:28px;border-radius:8px;display:flex;
   align-items:center;justify-content:center;font-size:.85em;font-weight:700}
 .ic-s{background:rgba(0,212,170,.14);color:var(--accent)}
@@ -235,6 +259,15 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
 .log-filter{width:210px;max-width:60%;background:var(--card2);border:1px solid var(--border);
   color:var(--text);border-radius:6px;padding:6px 8px;font-size:.8em;text-align:right}
 .log-filter::placeholder{color:var(--text3)}
+.action-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:10px}
+.action-dot{display:inline-flex;align-items:center;gap:7px;color:var(--text2);font-size:.78em}
+.blinkdot{width:10px;height:10px;border-radius:50%;background:var(--text3);box-shadow:none;transition:.15s}
+.blinkdot.hit{background:var(--accent);box-shadow:0 0 10px var(--accent)}
+.test-btn{padding:10px 8px;border-radius:10px;border:1px solid rgba(77,171,247,.3);
+  background:rgba(77,171,247,.12);color:var(--blue);font-size:.74em;font-weight:700}
+.test-btn:disabled{opacity:.4;color:var(--text3);border-color:var(--border);background:var(--card2)}
+.metric{font-size:.95em;font-weight:700;font-variant-numeric:tabular-nums}
+.metric small{font-size:.72em;color:var(--text3);font-weight:600}
 </style>
 </head>
 <body>
@@ -243,7 +276,7 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
 <!-- Header -->
 <div class="hdr">
   <h1>Tesla FSD</h1>
-  <div class="sub">ESP32 CAN Controller &middot; 192.168.4.1</div>
+  <div class="sub">ESP32 CAN Controller &middot; <span id="deviceHost">device.local</span></div>
   <div class="cdot" id="dot"></div>
 </div>
 <div id="connErr" class="err">Connection lost &mdash; retrying&hellip;</div>
@@ -318,6 +351,68 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
   </div>
 </div>
 
+<!-- Temporary Action Test -->
+<div class="card">
+  <div class="card-head"><div class="icon ic-c">T</div><h2>Action Test</h2></div>
+  <div class="row">
+    <span class="action-dot"><span class="blinkdot" id="tdl"></span>Turn Down Light</span>
+    <span class="action-dot"><span class="blinkdot" id="tdh"></span>Turn Down Hard</span>
+  </div>
+  <div class="row">
+    <span class="action-dot"><span class="blinkdot" id="tul"></span>Turn Up Light</span>
+    <span class="action-dot"><span class="blinkdot" id="tuh"></span>Turn Up Hard</span>
+  </div>
+  <div class="row">
+    <span class="action-dot"><span class="blinkdot" id="sfu"></span>Stalk Full Up</span>
+    <span class="action-dot"><span class="blinkdot" id="sfd"></span>Stalk Full Down</span>
+  </div>
+  <div class="row">
+    <span class="action-dot"><span class="blinkdot" id="slu"></span>Stalk Half Up</span>
+    <span class="action-dot"><span class="blinkdot" id="sld"></span>Stalk Half Down</span>
+  </div>
+  <div class="row">
+    <span class="action-dot"><span class="blinkdot" id="whu"></span>Wheel Up Single</span>
+    <span class="action-dot"><span class="blinkdot" id="whd"></span>Wheel Down Single</span>
+  </div>
+  <div class="row">
+    <span class="action-dot"><span class="blinkdot" id="wbu"></span>Wheel Up Burst</span>
+    <span class="action-dot"><span class="blinkdot" id="wbd"></span>Wheel Down Burst</span>
+  </div>
+  <div class="row">
+    <span class="lbl">AP Ready</span>
+    <span class="pill off" id="apReady"><span class="pd"></span>--</span>
+  </div>
+  <div class="row">
+    <span class="lbl">Left Turn</span>
+    <span class="pill off" id="leftTurnActive"><span class="pd"></span>--</span>
+  </div>
+  <div class="row">
+    <span class="lbl">Right Turn</span>
+    <span class="pill off" id="rightTurnActive"><span class="pd"></span>--</span>
+  </div>
+  <div class="row">
+    <span class="lbl">Detected Limit</span>
+    <span class="metric" id="detLimit">--</span>
+  </div>
+  <div class="row">
+    <span class="lbl">Cruise/AP Set</span>
+    <span class="metric" id="cruiseSet">--</span>
+  </div>
+  <div class="action-grid">
+    <button class="test-btn" id="btnShiftFull" onclick="testAction('shift_full')" disabled>SHIFT FULL</button>
+    <button class="test-btn" id="btnShiftDouble" onclick="testAction('shift_double')" disabled>SHIFT DOUBLE</button>
+    <button class="test-btn" onclick="testAction('gear_up_half')">GEAR UP HALF</button>
+    <button class="test-btn" onclick="testAction('gear_up_full')">GEAR UP FULL</button>
+    <button class="test-btn" onclick="testAction('gear_down_half')">GEAR DOWN HALF</button>
+    <button class="test-btn" onclick="testAction('gear_down_full')">GEAR DOWN FULL</button>
+    <button class="test-btn" onclick="testAction('wheel_short')">WHEEL +1</button>
+    <button class="test-btn" onclick="testAction('wheel_burst')">WHEEL +5</button>
+    <button class="test-btn" id="btnSet40" onclick="testAction('set_40')">SET 40 KM/H</button>
+    <button class="test-btn" id="btnEnableAp" onclick="testAction('enable_ap')" disabled>ENABLE AP</button>
+  </div>
+  <div class="log-info" id="testInfo">Gear buttons send 0x229 press/release test frames when TX is enabled.</div>
+</div>
+
 <!-- Battery -->
 <div class="card">
   <div class="card-head"><div class="icon ic-b">B</div><h2>Battery</h2></div>
@@ -360,39 +455,13 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
   </div>
 </div>
 
-<!-- HTTP CAN Log -->
-<div class="card">
-  <div class="card-head"><div class="icon ic-d">L</div><h2>HTTP CAN Log</h2></div>
-  <div class="row">
-    <span class="lbl">Stream</span>
-    <span class="pill off" id="httpLogSt"><span class="pd"></span>Idle</span>
-  </div>
-  <div class="row">
-    <span class="lbl">Filter IDs</span>
-    <input id="httpLogFilter" class="log-filter" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="0x370, 0x3FD">
-  </div>
-  <div class="row">
-    <span class="lbl">Buffered</span>
-    <span id="httpLogBuf" style="font-size:.8em;color:var(--text2)">0 frames</span>
-  </div>
-  <div class="row">
-    <span class="lbl">Dropped</span>
-    <span id="httpLogDrop" style="font-size:.8em;color:var(--text2)">0 frames</span>
-  </div>
-  <div class="row">
-    <span class="lbl">Filtered</span>
-    <span id="httpLogFiltered" style="font-size:.8em;color:var(--text2)">0 frames</span>
-  </div>
-  <div id="httpLogInfo" class="log-info">Ready to collect a candump file in this browser.</div>
-  <div class="log-actions">
-    <button id="btnHttpLog" type="button" class="btn-main btn-blue" onclick="toggleHttpLog()">STREAM LOG AND SAVE</button>
-  </div>
-</div>
-
 <!-- Controls -->
-<div class="card">
+<div class="card controls-section">
   <div class="card-head"><div class="icon ic-c">C</div><h2>Controls</h2></div>
   <button id="btnMode" class="btn-main btn-act" onclick="toggleMode()">ACTIVATE FSD</button>
+<details class="controls-fold">
+  <summary><span id="controlsSummary" class="control-summary">...</span></summary>
+  <div class="controls-body">
   <div class="row">
     <span class="lbl">Ignore OTA</span>
     <label class="sw"><input type="checkbox" id="swIgnoreOta" onchange="cmd('ignore_ota',this.checked)"><span class="sl2"></span></label>
@@ -453,11 +522,54 @@ R"rawliteral(
 )rawliteral"
 #endif
 R"rawliteral(
+  </div>
+</details>
+</div>
+
+<!-- Administration -->
+<details class="config-section">
+  <summary><div class="icon ic-c">A</div><div class="card-head" style="margin:0"><h2>Administration</h2></div></summary>
+  <div class="config-body">
+
+<!-- HTTP CAN Log -->
+<div class="card">
+  <div class="card-head"><div class="icon ic-d">L</div><h2>HTTP CAN Log</h2></div>
+  <div class="row">
+    <span class="lbl">Stream</span>
+    <span class="pill off" id="httpLogSt"><span class="pd"></span>Idle</span>
+  </div>
+  <div class="row">
+    <span class="lbl">Filter IDs</span>
+    <input id="httpLogFilter" class="log-filter" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="0x370, 0x3FD">
+  </div>
+  <div class="row">
+    <span class="lbl">Buffered</span>
+    <span id="httpLogBuf" style="font-size:.8em;color:var(--text2)">0 frames</span>
+  </div>
+  <div class="row">
+    <span class="lbl">Dropped</span>
+    <span id="httpLogDrop" style="font-size:.8em;color:var(--text2)">0 frames</span>
+  </div>
+  <div class="row">
+    <span class="lbl">Filtered</span>
+    <span id="httpLogFiltered" style="font-size:.8em;color:var(--text2)">0 frames</span>
+  </div>
+  <div id="httpLogInfo" class="log-info">Ready to collect a candump file in this browser.</div>
+  <div class="log-actions">
+    <button id="btnHttpLog" type="button" class="btn-main btn-blue" onclick="toggleHttpLog()">STREAM LOG AND SAVE</button>
+  </div>
 </div>
 
 <!-- WiFi Config -->
 <div class="card">
   <div class="card-head"><div class="icon ic-c">W</div><h2>WiFi Configuration</h2></div>
+  <div class="log-info" style="margin-bottom:10px">
+    The device starts its own access point by default. Optionally set a network below; when a network name is set, the device tries to connect to it on boot and starts its own access point if it cannot connect.
+  </div>
+  <div class="row">
+    <span class="lbl">Access Point</span>
+    <span style="font-size:.72em;color:var(--text3)">default</span>
+  </div>
   <div class="row">
     <span class="lbl">SSID</span>
     <input type="text" id="wifiSsid" maxlength="32" style="width:140px;background:var(--card2);border:1px solid var(--border);color:var(--text);padding:4px;border-radius:4px;text-align:right">
@@ -469,6 +581,18 @@ R"rawliteral(
   <div class="row">
     <span class="lbl">Stealth Mode (Hidden)</span>
     <label class="sw"><input type="checkbox" id="swWifiHid"><span class="sl2"></span></label>
+  </div>
+  <div class="row">
+    <span class="lbl">Connect to WiFi</span>
+    <span style="font-size:.72em;color:var(--text3)">optional</span>
+  </div>
+  <div class="row">
+    <span class="lbl">Network Name</span>
+    <input type="text" id="wifiStaSsid" maxlength="32" style="width:140px;background:var(--card2);border:1px solid var(--border);color:var(--text);padding:4px;border-radius:4px;text-align:right">
+  </div>
+  <div class="row">
+    <span class="lbl">Network Password</span>
+    <input type="password" id="wifiStaPass" maxlength="64" style="width:140px;background:var(--card2);border:1px solid var(--border);color:var(--text);padding:4px;border-radius:4px;text-align:right">
   </div>
   <button class="btn-main btn-stop" onclick="saveWifi()" style="margin-top:12px">SAVE & RESTART WIFI</button>
 </div>
@@ -529,6 +653,9 @@ R"rawliteral(
   <button class="btn-main btn-yellow" onclick="restartDevice(this)" style="margin-top:12px">RESTART DEVICE</button>
 </div>
 
+  </div>
+</details>
+
 <div class="foot">Tesla FSD ESP32 &middot;
 )rawliteral"
 #if defined(BOARD_TTGO_DISPLAY)
@@ -546,6 +673,7 @@ var httpLogName='',httpLogReady=false,httpLogSaveUrl='';
 var httpLogAllowed=true;
 var HW=['Unknown','Legacy','HW3','HW4'];
 var CIRC=326.73;
+document.getElementById('deviceHost').textContent=location.host||location.hostname||'192.168.4.1';
 
 function initWifi(d){
   if(wifiOnce)return;
@@ -553,6 +681,8 @@ function initWifi(d){
   document.getElementById('wifiSsid').value=d.wifi_ssid||'';
   document.getElementById('wifiPass').value=d.wifi_pass||'';
   document.getElementById('swWifiHid').checked=!!d.wifi_hidden;
+  document.getElementById('wifiStaSsid').value=d.wifi_sta_ssid||'';
+  document.getElementById('wifiStaPass').value=d.wifi_sta_pass||'';
 }
 
 function fmt(s){
@@ -564,6 +694,32 @@ function pill(id,on,txt,warnClass){
   var e=document.getElementById(id);
   e.className='pill '+(warnClass||''+(on?'on':'off'));
   e.innerHTML='<span class="pd"></span>'+txt;
+}
+function dot(id,on){
+  var e=document.getElementById(id);
+  if(e)e.className='blinkdot'+(on?' hit':'');
+}
+function speedText(v,seen,source){
+  if(!seen)return '--';
+  var src=source?'<small> '+source+'</small>':'';
+  return Math.round(v)+' km/h'+src;
+}
+function updateControlsSummary(d){
+  var e=document.getElementById('controlsSummary');
+  if(!e)return;
+  var items=[];
+  if(d.op_mode===1)items.push('Active');
+  if(d.ignore_ota)items.push('Ignore OTA');
+  if(d.nag_killer)items.push('NAG Killer');
+  if(d.bms_output)items.push('BMS');
+  if(d.force_fsd)items.push('Force FSD');
+  if(d.china_mode)items.push('China');
+  if(d.isa_speed_enabled&&d.suppress_speed_chime)items.push('Chime');
+  if(d.tlssc_restore)items.push('TLSSC');
+  if(d.display_enabled)items.push('Display');
+  if(d.can_dump)items.push('CAN Dump');
+  e.textContent=items.length?items.join(', '):'Expand to setup';
+  e.title=e.textContent;
 }
 function ring(p){
   var b=document.getElementById('socBar');
@@ -589,6 +745,39 @@ function upd(d){
   pill('bmsSt', d.bms && d.bms.seen, (d.bms && d.bms.seen)?'Live':'Waiting Frames');
   var bF=document.getElementById('bmsFrames');
   if(bF) bF.textContent='HV:'+(d.bms_hv_seen||0)+' SOC:'+(d.bms_soc_seen||0)+' TH:'+(d.bms_thermal_seen||0);
+
+  if(d.test){
+    dot('tdl',!!d.test.turn_down_light);
+    dot('tdh',!!d.test.turn_down_hard);
+    dot('tul',!!d.test.turn_up_light);
+    dot('tuh',!!d.test.turn_up_hard);
+    dot('sfu',!!d.test.stalk_full_up);
+    dot('sfd',!!d.test.stalk_full_down);
+    dot('slu',!!d.test.stalk_light_up);
+    dot('sld',!!d.test.stalk_light_down);
+    dot('whu',!!d.test.wheel_up);
+    dot('whd',!!d.test.wheel_down);
+    dot('wbu',!!d.test.wheel_up_burst);
+    dot('wbd',!!d.test.wheel_down_burst);
+    pill('apReady',!!d.test.ap_ready,d.test.ap_ready?'Ready':'Not Ready');
+    pill('leftTurnActive',!!d.test.left_turn_active,d.test.left_turn_active?'Active':(d.test.left_turn_status_seen?'Idle':'--'));
+    pill('rightTurnActive',!!d.test.right_turn_active,d.test.right_turn_active?'Active':(d.test.right_turn_status_seen?'Idle':'--'));
+    var dl=document.getElementById('detLimit');
+    if(dl)dl.innerHTML=speedText(d.test.speed_limit_kph||0,!!d.test.speed_limit_seen,d.test.speed_limit_source||'');
+    var cs=document.getElementById('cruiseSet');
+    if(cs)cs.innerHTML=speedText(d.test.cruise_set_speed_kph||0,!!d.test.cruise_set_speed_seen,'set');
+    var s40=document.getElementById('btnSet40');
+    if(s40){
+      s40.disabled=false;
+      s40.title=d.test.cruise_set_speed_seen?'Overrides the next live 0x2B9 frames':'Arms override and waits for live 0x2B9';
+    }
+    var apBtn=document.getElementById('btnEnableAp');
+    if(apBtn){
+      var canAp=d.op_mode===1 && !!d.test.ap_ready;
+      apBtn.disabled=!canAp;
+      apBtn.title=canAp?'Send 0x340 full-down twice':'Requires Active mode and AP Ready';
+    }
+  }
 
   // OTA banner
   var otaB=document.getElementById('otaBanner');
@@ -628,6 +817,7 @@ function upd(d){
   if(document.activeElement.id!=='numSleep' && document.getElementById('numSleep'))
     document.getElementById('numSleep').value=Math.floor((d.sleep_ms||0)/1000);
 
+  updateControlsSummary(d);
   pill('dumpSt',d.can_dump,d.can_dump?'Recording':'Idle');
 
   // CAN stats
@@ -827,11 +1017,14 @@ function saveWifi(){
   var s=document.getElementById('wifiSsid').value;
   var p=document.getElementById('wifiPass').value;
   var h=document.getElementById('swWifiHid').checked;
+  var ss=document.getElementById('wifiStaSsid').value;
+  var sp=document.getElementById('wifiStaPass').value;
   if(s.length<1){alert('SSID required');return;}
-  if(p.length>0 && p.length<8){alert('Password must be 8+ chars');return;}
+  if(p!=='***' && p.length>0 && p.length<8){alert('Password must be empty or 8+ chars');return;}
+  if(sp!=='***' && ss.length>0 && sp.length>0 && sp.length<8){alert('Network password must be empty or 8+ chars');return;}
   if(confirm('WiFi settings will be updated and the device will restart.')){
     var b=document.activeElement; if(b&&b.tagName==='BUTTON'){b.disabled=true;b.textContent='SAVING...';}
-    cmd('wifi_cfg',{ssid:s,pass:p,hidden:h});
+    cmd('wifi_cfg',{ssid:s,pass:p,hidden:h,sta_ssid:ss,sta_pass:sp});
   }
 }
 function cmd(c,v){
@@ -841,6 +1034,7 @@ function cmd(c,v){
   }
 }
 function toggleMode(){ cmd('mode',null); }
+function testAction(a){ cmd('test_action',a); }
 
 function logInfo(text,color){
   var e=document.getElementById('httpLogInfo');
@@ -1065,6 +1259,7 @@ static String build_json() {
     if (!state_copy(&state)) return "{}";
 
     uint32_t uptime_s = (millis() - g_start_ms) / 1000;
+    uint32_t now_ms = millis();
     bool can_vehicle_detected = false;
     if (state.rx_count > 0) {
         can_vehicle_detected = (millis() - g_last_can_seen_ms) <= CAN_VEHICLE_ALIVE_MS;
@@ -1110,8 +1305,19 @@ static String build_json() {
         (state.hw_version == TeslaHW_HW3) ? "HW3: DAS 0x399" :
         (state.hw_version == TeslaHW_Legacy) ? "Legacy: DAS 0x399" :
         "Waiting for HW detection";
+    const char *speed_limit_source = "none";
+    switch (state.speed_limit_source) {
+        case SpeedLimitSource_Map:    speed_limit_source = "map"; break;
+        case SpeedLimitSource_Vision: speed_limit_source = "vision"; break;
+        case SpeedLimitSource_Acc:    speed_limit_source = "acc"; break;
+        case SpeedLimitSource_None:
+        default: break;
+    }
+    auto recent = [now_ms](uint32_t ts) -> bool {
+        return ts != 0u && (uint32_t)(now_ms - ts) <= 1500u;
+    };
 
-    j.reserve(900);
+    j.reserve(1500);
     j  = "{";
     j += "\"fsd_enabled\":";   j += state.fsd_enabled                 ? "true" : "false"; j += ',';
     j += "\"ap_active\":";     j += state.ap_active                   ? "true" : "false"; j += ',';
@@ -1150,6 +1356,8 @@ static String build_json() {
     j += "\"wifi_ssid\":\"";  j += json_escape(state.wifi_ssid);      j += "\",";
     j += "\"wifi_pass\":\"***\",";
     j += "\"wifi_hidden\":";  j += state.wifi_hidden                  ? "true" : "false"; j += ',';
+    j += "\"wifi_sta_ssid\":\""; j += json_escape(state.wifi_sta_ssid); j += "\",";
+    j += "\"wifi_sta_pass\":\"***\",";
     j += "\"wifi_clients\":";  j += (int)WiFi.softAPgetStationNum();   j += ',';
     j += "\"http_can_stream\":{";
     j += "\"active\":";       j += http_can_stream_active()           ? "true" : "false"; j += ',';
@@ -1157,6 +1365,34 @@ static String build_json() {
     j += "\"dropped\":";      j += http_can_stream_frames_dropped();   j += ',';
     j += "\"filtered\":";     j += http_can_stream_frames_filtered();  j += ',';
     j += "\"buffered\":";     j += http_can_stream_buffered_frames();  j += "},";
+    j += "\"test\":{";
+    j += "\"turn_down_light\":"; j += recent(state.turn_down_light_ms) ? "true" : "false"; j += ',';
+    j += "\"turn_down_hard\":";  j += recent(state.turn_down_hard_ms)  ? "true" : "false"; j += ',';
+    j += "\"turn_up_light\":";   j += recent(state.turn_up_light_ms)   ? "true" : "false"; j += ',';
+    j += "\"turn_up_hard\":";    j += recent(state.turn_up_hard_ms)    ? "true" : "false"; j += ',';
+    j += "\"stalk_full_up\":";    j += recent(state.stalk_full_up_ms)   ? "true" : "false"; j += ',';
+    j += "\"stalk_full_down\":";  j += recent(state.stalk_full_down_ms) ? "true" : "false"; j += ',';
+    j += "\"stalk_light_up\":";   j += recent(state.stalk_light_up_ms)  ? "true" : "false"; j += ',';
+    j += "\"stalk_light_down\":"; j += recent(state.stalk_light_down_ms)? "true" : "false"; j += ',';
+    j += "\"wheel_up\":";         j += recent(state.wheel_up_ms)         ? "true" : "false"; j += ',';
+    j += "\"wheel_down\":";       j += recent(state.wheel_down_ms)       ? "true" : "false"; j += ',';
+    j += "\"wheel_up_burst\":";   j += recent(state.wheel_up_burst_ms)   ? "true" : "false"; j += ',';
+    j += "\"wheel_down_burst\":"; j += recent(state.wheel_down_burst_ms) ? "true" : "false"; j += ',';
+    j += "\"ap_ready\":";        j += state.ap_ready                   ? "true" : "false"; j += ',';
+    j += "\"left_turn_active\":";
+    j += state.left_turn_active ? "true" : "false";
+    j += ',';
+    j += "\"left_turn_status_seen\":"; j += state.left_turn_status_seen ? "true" : "false"; j += ',';
+    j += "\"right_turn_active\":";
+    j += state.right_turn_active ? "true" : "false";
+    j += ',';
+    j += "\"right_turn_status_seen\":"; j += state.right_turn_status_seen ? "true" : "false"; j += ',';
+    j += "\"turn_status_seen\":"; j += state.turn_status_seen           ? "true" : "false"; j += ',';
+    j += "\"speed_limit_seen\":"; j += state.speed_limit_seen          ? "true" : "false"; j += ',';
+    j += "\"speed_limit_kph\":";  j += String(state.speed_limit_kph, 1); j += ',';
+    j += "\"speed_limit_source\":\""; j += speed_limit_source;          j += "\",";
+    j += "\"cruise_set_speed_seen\":"; j += state.cruise_set_speed_seen ? "true" : "false"; j += ',';
+    j += "\"cruise_set_speed_kph\":";  j += String(state.cruise_set_speed_kph, 1); j += "},";
     j += "\"ota_partition\":"; j += ota_part;
     j += '}';
     return j;
@@ -1361,6 +1597,36 @@ static void ws_event(uint8_t num, WStype_t type,
                 prefs_save(&saved);
             }
         }
+    } else if (strstr(buf, "\"test_action\"")) {
+        TestActionRequest action = TestAction_None;
+        if (strstr(buf, "\"shift_full\"")) {
+            action = TestAction_ShiftFullPress;
+        } else if (strstr(buf, "\"shift_double\"")) {
+            action = TestAction_ShiftFullDoublePress;
+        } else if (strstr(buf, "\"wheel_short\"")) {
+            action = TestAction_RightWheelShort;
+        } else if (strstr(buf, "\"wheel_burst\"")) {
+            action = TestAction_RightWheelBurst;
+        } else if (strstr(buf, "\"gear_up_half\"")) {
+            action = TestAction_GearUpHalf;
+        } else if (strstr(buf, "\"gear_up_full\"")) {
+            action = TestAction_GearUpFull;
+        } else if (strstr(buf, "\"gear_down_half\"")) {
+            action = TestAction_GearDownHalf;
+        } else if (strstr(buf, "\"gear_down_full\"")) {
+            action = TestAction_GearDownFull;
+        } else if (strstr(buf, "\"set_40\"")) {
+            action = TestAction_SetCruise40;
+        } else if (strstr(buf, "\"enable_ap\"")) {
+            action = TestAction_EnableAp;
+        }
+        if (action != TestAction_None) {
+            state_enter();
+            g_state->test_action_request = action;
+            g_state->test_action_seq++;
+            state_exit();
+            Serial.printf("[Web] Test action request: %u\n", (unsigned)action);
+        }
     } else if (strstr(buf, "\"wifi_cfg\"")) {
         // Find the "value":{ object start
         const char *vobj = strstr(buf, "\"value\":");
@@ -1370,6 +1636,8 @@ static void ws_event(uint8_t num, WStype_t type,
             char *s = strstr(vobj, "\"ssid\":\"");
             char *p = strstr(vobj, "\"pass\":\"");
             char *h = strstr(vobj, "\"hidden\":");
+            char *ss = strstr(vobj, "\"sta_ssid\":\"");
+            char *sp = strstr(vobj, "\"sta_pass\":\"");
             if (s) {
                 s += 8;
                 char *end = strchr(s, '\"');
@@ -1401,10 +1669,35 @@ static void ws_event(uint8_t num, WStype_t type,
                 if (strncmp(h, "true", 4) == 0) g_state->wifi_hidden = true;
                 else if (strncmp(h, "false", 5) == 0) g_state->wifi_hidden = false;
             }
+            if (ss) {
+                ss += 12;
+                char *end = strchr(ss, '\"');
+                if (end) {
+                    int len = end - ss;
+                    if (len > 32) len = 32;
+                    if (memchr(ss, '\\', len) == nullptr) {
+                        memcpy(g_state->wifi_sta_ssid, ss, len);
+                        g_state->wifi_sta_ssid[len] = '\0';
+                    }
+                }
+            }
+            if (sp) {
+                sp += 12;
+                char *end = strchr(sp, '\"');
+                if (end) {
+                    int len = end - sp;
+                    if (len > 64) len = 64;
+                    if (memchr(sp, '\\', len) == nullptr &&
+                        !(len == 3 && memcmp(sp, "***", 3) == 0)) {
+                        memcpy(g_state->wifi_sta_pass, sp, len);
+                        g_state->wifi_sta_pass[len] = '\0';
+                    }
+                }
+            }
             saved = *g_state;
             state_exit();
-            Serial.printf("[Web] WiFi config: SSID=\"%s\" PASS=*** HIDDEN=%d\n",
-                saved.wifi_ssid, saved.wifi_hidden);
+            Serial.printf("[Web] WiFi config: AP=\"%s\" STA=\"%s\" PASS=*** HIDDEN=%d\n",
+                saved.wifi_ssid, saved.wifi_sta_ssid, saved.wifi_hidden);
             prefs_save(&saved);
             delay(500);
             ESP.restart();

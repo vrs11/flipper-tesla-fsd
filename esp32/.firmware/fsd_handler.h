@@ -85,3 +85,36 @@ void fsd_handle_das_status_hw3(FSDState *state, const CanFrame *frame);
 
 /** Parse DAS_status from HW4 0x39B — updates AP/speed/hands-on state. */
 void fsd_handle_das_status_hw4(FSDState *state, const CanFrame *frame);
+
+/** Parse SCCMLeftStalk 0x249 turn-detent input for temporary test dashboard. */
+void fsd_handle_sccm_left_stalk(FSDState *state, const CanFrame *frame, uint32_t now_ms);
+
+/** Parse GearLever / right stalk 0x229 for right-stalk detents. */
+void fsd_handle_gear_lever(FSDState *state, const CanFrame *frame, uint32_t now_ms);
+
+/** Parse VCLEFT_switchStatus 0x3C2 right-scroll-wheel input. */
+void fsd_handle_vcleft_switch(FSDState *state, const CanFrame *frame, uint32_t now_ms);
+
+/** Parse UI_driverAssistMapData 0x238 map/location speed limit. */
+void fsd_handle_ui_map_data(FSDState *state, const CanFrame *frame, uint32_t now_ms);
+
+/** Parse DAS_status2 0x389 ACC speed-limit readback. */
+void fsd_handle_das_status2(FSDState *state, const CanFrame *frame, uint32_t now_ms);
+
+/** Parse DAS_control 0x2B9 cruise/AP set speed. */
+void fsd_handle_das_control(FSDState *state, const CanFrame *frame);
+
+/** Parse VCFRONT_lighting 0x3F5 turn signal request state. */
+void fsd_handle_vcfront_lighting(FSDState *state, const CanFrame *frame);
+
+/** Build VCLEFT_switchStatus 0x3C2 right-scroll-wheel frame. */
+void fsd_build_right_scroll_frame(CanFrame *frame, int8_t ticks);
+
+/** Build raw 0x340 stalk action frame observed in road-test logs. */
+void fsd_build_stalk_action_frame(CanFrame *frame, uint8_t action);
+
+/** Build GearLever / right stalk 0x229 with rolling counter and CRC byte. */
+bool fsd_build_gear_lever_frame(CanFrame *frame, uint8_t gear_pos, uint8_t counter);
+
+/** Modify a live DAS_control 0x2B9 frame to a specific set speed and checksum. */
+void fsd_set_das_control_speed(CanFrame *frame, float speed_kph);
