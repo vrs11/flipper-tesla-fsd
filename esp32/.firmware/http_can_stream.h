@@ -1,8 +1,8 @@
 #pragma once
 
 #include <Arduino.h>
-#include "can_driver.h"
 #include "fsd_handler.h"
+#include "can_driver.h"
 
 /**
  * HTTP CAN stream logger.

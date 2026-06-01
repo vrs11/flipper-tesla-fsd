@@ -11,35 +11,25 @@
 
 #include "fsd_handler.h"
 #include "can_signals.h"
+#include "../../fsd_logic/fsd_checksum.h"  // shared Tesla additive checksum (single impl, both platforms)
+#include "../../fsd_logic/fsd_can_ops.h"   // shared stateless frame primitives (set_bit / mux / fsd-selected)
 #include <string.h>
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
+// DAS_autopilotControl byte 4 bits [7:6] = UI "FSD selected" flag (bit 38 in the 64-bit data
+// field). Note: bit 46 is the *output* FSD-activation bit written to the modified frame —
+// a different field at byte 5 bit 6. Logic shared with the Flipper via fsd_can_ops.h.
 static void set_bit(CanFrame *frame, int bit, bool value) {
-    if (bit < 0 || bit >= CAN_FRAME_MAX_BITS) return;
-    int byte_idx = bit / 8;
-    int bit_idx  = bit % 8;
-    uint8_t mask = (uint8_t)(1U << bit_idx);
-    if (value)
-        frame->data[byte_idx] |= mask;
-    else
-        frame->data[byte_idx] &= (uint8_t)(~mask);
+    tesla_set_bit(frame->data, bit, value);
 }
 
 static uint8_t read_mux_id(const CanFrame *frame) {
-    // MUX ID is the lower 3 bits of byte 0
-    return frame->data[CAN_MUX_BYTE] & CAN_MUX_MASK;
+    return tesla_read_mux(frame->data);
 }
 
 static bool is_fsd_selected(const CanFrame *frame, bool force_fsd, bool china_mode) {
-    if (force_fsd) return true;
-    if (china_mode) return true;
-    if (frame->dlc < 5) return false;
-    // DAS_autopilotControl byte 4 bits [7:6] = UI "FSD selected" flag (bit 38 in the 64-bit data
-    // field).  Note: bit 46 is the *output* FSD-activation bit written to the modified frame —
-    // a different field at byte 5 bit 6.
-    return (frame->data[SIG_AP_UI_FSD_SELECTED_BYTE] >> SIG_AP_UI_FSD_SELECTED_SHIFT) &
-           SIG_AP_UI_FSD_SELECTED_MASK;
+    return tesla_is_fsd_selected(frame->data, frame->dlc, force_fsd, china_mode);
 }
 
 // ── State init ────────────────────────────────────────────────────────────────
@@ -49,8 +39,7 @@ void fsd_state_init(FSDState *state, TeslaHWVersion hw) {
     fsd_apply_hw_version(state, hw);
     state->op_mode    = OpMode_ListenOnly;  // safe default — never TX on boot
 
-    // Feature flags: nag killer defaults ON; ISA_SPEED chime is HW4-only.
-    state->fsd_unlock          = true;
+    // Feature flags: nag killer and chime suppress default ON; others OFF
     state->nag_killer           = true;
     state->suppress_speed_chime = true;
     state->ignore_ota           = false;
@@ -58,6 +47,8 @@ void fsd_state_init(FSDState *state, TeslaHWVersion hw) {
     state->force_fsd            = false;
     state->china_mode           = false;
     state->bms_output           = false;
+    // 14.x warning default ON — most affected users don't know their firmware version
+    state->firmware_14x_warning = true;
 #if defined(BOARD_TTGO_DISPLAY)
     state->display_enabled      = true;
     state->display_brightness   = 50;
@@ -98,9 +89,10 @@ TeslaHWVersion fsd_detect_hw_version(const CanFrame *frame) {
                      SIG_GTW_DAS_HW_MASK;
     switch (das_hw) {
         case SIG_GTW_DAS_HW_LEGACY_0:
-        case SIG_GTW_DAS_HW_LEGACY_1: return TeslaHW_Legacy;  // HW1/HW2/EAP retrofit
-        case SIG_GTW_DAS_HW_HW3:      return TeslaHW_HW3;
-        case SIG_GTW_DAS_HW_HW4:      return TeslaHW_HW4;
+        case SIG_GTW_DAS_HW_LEGACY_1:
+            return TeslaHW_Legacy;   // HW1/HW2/EAP retrofit — uses 0x3EE/0x045
+        case SIG_GTW_DAS_HW_HW3: return TeslaHW_HW3;
+        case SIG_GTW_DAS_HW_HW4: return TeslaHW_HW4;
         default: return TeslaHW_Unknown;
     }
 }
@@ -173,8 +165,6 @@ bool fsd_handle_autopilot_frame(FSDState *state, CanFrame *frame) {
     // mux 0 is the authoritative "is FSD requested" mux
     if (mux == CAN_MUX_0) state->fsd_enabled = fsd_ui;
 
-    if (!state->fsd_unlock) return false;
-
     if (state->hw_version == TeslaHW_HW3) {
         // ── HW3 ──────────────────────────────────────────────────────────────
         if (mux == CAN_MUX_0 && state->fsd_enabled) {
@@ -219,15 +209,15 @@ bool fsd_handle_autopilot_frame(FSDState *state, CanFrame *frame) {
     } else {
         // ── HW4 ──────────────────────────────────────────────────────────────
         if (mux == CAN_MUX_0 && state->fsd_enabled) {
-            set_bit(frame, SIG_AP_FSD_ENABLE_BIT, true);
-            set_bit(frame, SIG_AP_HW4_FSD_ENABLE_BIT, true);
+            set_bit(frame, SIG_AP_FSD_ENABLE_BIT, true);       // FSD activation
+            set_bit(frame, SIG_AP_HW4_FSD_ENABLE_BIT, true);   // HW4 additional FSD bit
             if (state->emergency_vehicle_detect)
                 set_bit(frame, SIG_AP_HW4_EMERGENCY_VEHICLE_BIT, true);
             modified = true;
         }
         if (mux == CAN_MUX_1) {
-            set_bit(frame, SIG_AP_NAG_CLEAR_BIT, false);
-            set_bit(frame, SIG_AP_HW4_NAG_CONFIRM_BIT, true);
+            set_bit(frame, SIG_AP_NAG_CLEAR_BIT, false);      // clear hands-on-wheel nag
+            set_bit(frame, SIG_AP_HW4_NAG_CONFIRM_BIT, true); // HW4 nag-suppression confirmation bit
             state->nag_suppressed = true;
             modified = true;
         }
@@ -242,6 +232,7 @@ bool fsd_handle_autopilot_frame(FSDState *state, CanFrame *frame) {
         }
     }
 
+    if (modified) state->frames_modified++;
     return modified;
 }
 
@@ -269,8 +260,6 @@ bool fsd_handle_legacy_autopilot(FSDState *state, CanFrame *frame) {
 
     if (mux == CAN_MUX_0) state->fsd_enabled = fsd_ui;
 
-    if (!state->fsd_unlock) return false;
-
     if (mux == CAN_MUX_0 && state->fsd_enabled) {
         set_bit(frame, SIG_AP_FSD_ENABLE_BIT, true);
         // Speed profile in bits 2:1 of byte 6 (same encoding as HW3)
@@ -286,6 +275,7 @@ bool fsd_handle_legacy_autopilot(FSDState *state, CanFrame *frame) {
         modified = true;
     }
 
+    if (modified) state->frames_modified++;
     return modified;
 }
 
@@ -295,30 +285,26 @@ bool fsd_handle_isa_speed_chime(CanFrame *frame) {
     if (frame->dlc < 8) return false;
     // Set "ISA_speedLimitSoundActive" flag: bit 5 of byte 1
     frame->data[SIG_ISA_SOUND_ACTIVE_BYTE] |= SIG_ISA_SOUND_ACTIVE_MASK;
-    // Recalculate Tesla checksum: sum(byte0..6) + low(CAN_ID) + high(CAN_ID)
-    uint8_t sum = 0;
-    for (int i = 0; i < 7; i++)
-        sum += frame->data[i];
-    sum += (uint8_t)(CAN_ID_ISA_SPEED & 0xFFu) + (uint8_t)(CAN_ID_ISA_SPEED >> 8);
-    frame->data[7] = sum;
+    // Recalculate Tesla checksum (shared impl): sum(byte0..6) + low(CAN_ID) + high(CAN_ID)
+    frame->data[7] = tesla_additive_checksum(CAN_ID_ISA_SPEED, frame->data, 7);
     return true;
 }
 
 // ── NAG killer: counter+1 echo of EPAS3P_sysStatus (0x370) ──────────────────
 //
-// When handsOnLevel == 0 (nag imminent), 2 (marginal), or 3 (escalated), we send a
+// When handsOnLevel == 0 (nag imminent) or 3 (escalated alarm), we send a
 // spoofed EPAS frame with handsOnLevel=1 and counter+1 before the real frame
 // reaches the DAS.  The DAS sees "hands on" and drops the nag.
 //
-// DAS-aware gating: also checks das_hands_on_state from DAS_status.  States 0
+// DAS-aware gating: also checks das_hands_on_state from 0x39B.  States 0
 // (NOT_REQD) and 8 (SUSPENDED) mean DAS is already satisfied — skip the echo
-// to avoid ~25 spurious frames/sec on the bus.  The echo is also gated on
-// ap_active so Active mode does not spam EPAS echoes while the car is parked.
+// to avoid ~25 spurious frames/sec on the bus.  If 0x39B has never been seen
+// (das_seen==false), we echo conservatively based on EPAS level alone.
 //
-// Organic torque: torsionBarTorque uses a xorshift32 random walk [1.00–2.40 Nm].
-// On first spoof and on each handsOnLevel transition into an eligible nag state,
-// it sends an immediate 3-5 frame grip pulse [3.10–3.30 Nm], then resets the
-// periodic 5-9 s pulse countdown.
+// Organic torque: torsionBarTorque uses a xorshift32 random walk [1.00–2.40 Nm]
+// with brief grip pulses [3.10–3.30 Nm] every 5–9 s.  A flat signal for 30+
+// minutes is a statistical impossibility from a real hand and is a known
+// telemetry detection vector.
 //
 // Checksum: byte7 = (sum(byte0..6) + 0x70 + 0x03) & 0xFF  (CAN ID 0x370 split)
 
@@ -326,8 +312,6 @@ static uint32_t nag_prng_state       = 0xDEADBEEFu;
 static int16_t  nag_torq_walk        = 2230;   // raw init ≈ 1.80 Nm
 static uint8_t  nag_exc_frames       = 0;
 static uint16_t nag_frames_until_exc = 175;
-static uint8_t  nag_last_hands_on    = 0xFFu;
-static bool     nag_session_active   = false;
 
 static uint32_t nag_xorshift32() {
     uint32_t x = nag_prng_state;
@@ -338,77 +322,39 @@ static uint32_t nag_xorshift32() {
     return x;
 }
 
-static void nag_schedule_periodic_pulse() {
-    nag_frames_until_exc = (uint16_t)(125u + (nag_xorshift32() % 100u));
-}
-
-static void nag_start_grip_pulse() {
-    nag_exc_frames = (uint8_t)(3u + (nag_xorshift32() % 3u));
-    nag_schedule_periodic_pulse();
-}
-
-static void nag_reset_session(uint8_t hands_on) {
-    nag_last_hands_on  = hands_on;
-    nag_session_active = false;
-    nag_exc_frames     = 0;
-}
-
-static int16_t nag_grip_pulse_torque() {
-    // Raw torque: Nm = raw * 0.01 - 20.5. 2360-2380 => 3.10-3.30 Nm.
-    return (int16_t)(2360 + (int)(nag_xorshift32() % 21u));
-}
-
-static int16_t nag_random_walk_torque() {
-    int16_t step = (int16_t)((int)(nag_xorshift32() % 31u) - 15);
-    nag_torq_walk += step;
-    if (nag_torq_walk < 2150) nag_torq_walk = 2150;  // min ~1.00 Nm
-    if (nag_torq_walk > 2290) nag_torq_walk = 2290;  // max ~2.40 Nm
-    return nag_torq_walk;
-}
-
 bool fsd_handle_nag_killer(FSDState *state, const CanFrame *frame, CanFrame *out) {
-    if (frame->dlc < 8) return false;
+    if (frame->dlc < 8)     return false;
+    if (!state->nag_killer) return false;
 
     // EPAS handsOnLevel: bits 7:6 of byte 4.  Skip only when level==1 (hands OK).
     uint8_t hands_on = (frame->data[SIG_EPAS_HANDS_ON_BYTE] >> SIG_EPAS_HANDS_ON_SHIFT) &
                        SIG_EPAS_HANDS_ON_MASK;
-
-    if (!state->nag_killer || !state->ap_active) {
-        nag_reset_session(hands_on);
-        return false;
-    }
-
-    if (hands_on == SIG_EPAS_HANDS_ON_OK) {
-        nag_reset_session(hands_on);
-        return false;
-    }
+    if (hands_on == SIG_EPAS_HANDS_ON_OK) return false;
 
     // DAS-aware gating — skip echo when DAS itself is satisfied.
     if (state->das_seen) {
         uint8_t das = state->das_hands_on_state;
-        if (das == SIG_DAS_HANDS_ON_NOT_REQUIRED || das == SIG_DAS_HANDS_ON_SUSPENDED) {
-            nag_reset_session(hands_on);
+        if (das == SIG_DAS_HANDS_ON_NOT_REQUIRED || das == SIG_DAS_HANDS_ON_SUSPENDED)
             return false;
-        }
     }
 
-    if (!nag_session_active || nag_last_hands_on != hands_on) {
-        nag_session_active = true;
-        nag_torq_walk = 2300; // first post-transition baseline: ~2.50 Nm
-        nag_start_grip_pulse();
-    }
-    nag_last_hands_on = hands_on;
-
+    // Organic torque random walk
     int16_t torq;
     if (nag_exc_frames > 0) {
-        torq = nag_grip_pulse_torque();
+        // Grip pulse: ~3.20 Nm ± noise
+        torq = 2350 + (int16_t)((int)(nag_xorshift32() % 41u) - 20);
         nag_exc_frames--;
     } else {
-        torq = nag_random_walk_torque();
+        int16_t step = (int16_t)((int)(nag_xorshift32() % 31u) - 15);
+        nag_torq_walk += step;
+        if (nag_torq_walk < 2150) nag_torq_walk = 2150;  // min ~1.00 Nm
+        if (nag_torq_walk > 2290) nag_torq_walk = 2290;  // max ~2.40 Nm
+        torq = nag_torq_walk;
         if (nag_frames_until_exc > 0) {
             nag_frames_until_exc--;
         } else {
-            nag_start_grip_pulse();
+            nag_exc_frames       = (uint8_t)(3u + (nag_xorshift32() % 3u));
+            nag_frames_until_exc = (uint16_t)(125u + (nag_xorshift32() % 100u));
         }
     }
 
@@ -424,7 +370,7 @@ bool fsd_handle_nag_killer(FSDState *state, const CanFrame *frame, CanFrame *out
     out->data[SIG_EPAS_TORQUE_LOW_BYTE] = (uint8_t)(torq & SIG_EPAS_TORQUE_LOW_MASK);
     out->data[SIG_EPAS_HANDS_ON_BYTE] =
         (frame->data[SIG_EPAS_HANDS_ON_BYTE] & (uint8_t)(~SIG_EPAS_HANDS_ON_CLEAR_MASK)) |
-        SIG_EPAS_HANDS_ON_SPOOF_VALUE;
+        SIG_EPAS_HANDS_ON_SPOOF_VALUE;  // handsOnLevel = 1
     out->data[5] = frame->data[5];
 
     // counter+1: lower nibble of byte 6
@@ -433,12 +379,8 @@ bool fsd_handle_nag_killer(FSDState *state, const CanFrame *frame, CanFrame *out
     out->data[SIG_EPAS_COUNTER_BYTE] =
         (frame->data[SIG_EPAS_COUNTER_BYTE] & SIG_EPAS_COUNTER_KEEP_MASK) | cnt;
 
-    // Checksum
-    uint16_t sum = 0;
-    for (int i = 0; i < 7; i++)
-        sum += out->data[i];
-    sum += (CAN_ID_EPAS_STATUS & 0xFFu) + (CAN_ID_EPAS_STATUS >> 8);
-    out->data[7] = (uint8_t)(sum & 0xFFu);
+    // Checksum (shared impl)
+    out->data[7] = tesla_additive_checksum(CAN_ID_EPAS_STATUS, out->data, 7);
 
     state->nag_echo_count++;
     state->nag_suppressed = true;

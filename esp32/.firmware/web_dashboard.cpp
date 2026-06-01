@@ -23,8 +23,8 @@
 
 // ── Module state ──────────────────────────────────────────────────────────────
 static FSDState  *g_state = nullptr;   // shared with main
-static CanDriver **g_can_buses = nullptr;  // for setListenOnly()
-static uint8_t     g_can_count = 0;
+static CanDriver **g_can_buses = nullptr; // for setListenOnly()
+static uint8_t g_can_count = 0;
 static portMUX_TYPE *g_state_mux = nullptr;
 
 static WebServer        g_http(80);
@@ -119,6 +119,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
   color:var(--red);font-weight:700;font-size:.9em;letter-spacing:.04em;
   animation:pulse 1s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.55}}
+
+/* ── 14.x firmware warning (static, non-animated) ── */
+.warn14x{display:none;background:rgba(252,196,25,.08);border:1px solid rgba(252,196,25,.45);
+  border-radius:12px;padding:10px 14px;margin-bottom:12px;color:#fcc419;font-size:.82em;
+  line-height:1.4;text-align:left}
+.warn14x .w-row{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.warn14x .w-msg{flex:1}
+.warn14x .w-dismiss{background:transparent;border:1px solid rgba(252,196,25,.5);color:#fcc419;
+  padding:5px 10px;border-radius:6px;cursor:pointer;font-size:.8em;font-weight:600;
+  white-space:nowrap}
+.warn14x .w-dismiss:hover{background:rgba(252,196,25,.15)}
 
 /* ── Error banner ── */
 .err{display:none;color:var(--red);text-align:center;font-size:.78em;padding:8px;
@@ -239,15 +250,15 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
 
 <div id="authPanel" class="auth-panel">
   <div class="auth-box">
-    <h3>Authentication</h3>
-    <div class="auth-msg">Enter the administrator username and WiFi AP password.</div>
+    <h3>Authentication Required</h3>
+    <div class="auth-msg">Enter the admin username and the WiFi AP password.</div>
     <label class="auth-field" for="authUser">Username</label>
     <input id="authUser" class="auth-input" type="text" value="admin" autocomplete="username">
     <label class="auth-field" for="authPass">Password</label>
     <input id="authPass" class="auth-input" type="password" autocomplete="current-password">
     <div class="auth-actions">
-      <button type="button" class="btn-main btn-stop" onclick="cancelAuth()">CANCEL</button>
-      <button type="button" class="btn-main btn-blue" onclick="submitAuth()">LOGIN</button>
+      <button type="button" class="btn-main btn-stop" onclick="cancelAuth()">Cancel</button>
+      <button type="button" class="btn-main btn-blue" onclick="submitAuth()">Sign In</button>
     </div>
   </div>
 </div>
@@ -255,16 +266,32 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
 <div id="restartConfirmPanel" class="confirm-panel">
   <div class="auth-box">
     <h3>Restart device?</h3>
-    <div class="auth-msg">The device will restart immediately and the web connection will briefly disconnect.</div>
+    <div class="auth-msg">The device will reboot immediately and the web connection will drop briefly.</div>
     <div class="auth-actions">
-      <button type="button" class="btn-main btn-stop" onclick="cancelRestartConfirm()">NO</button>
-      <button type="button" class="btn-main btn-yellow" onclick="confirmRestart()">YES</button>
+      <button type="button" class="btn-main btn-stop" onclick="cancelRestartConfirm()">No</button>
+      <button type="button" class="btn-main btn-yellow" onclick="confirmRestart()">Yes</button>
     </div>
   </div>
 </div>
 
 <!-- OTA Warning -->
 <div id="otaBanner" class="ota">&#9888;&#xFE0F; OTA UPDATE IN PROGRESS &mdash; CAN TX SUSPENDED</div>
+
+<!-- 2026.14.x Firmware Warning -->
+<div id="warn14x" class="warn14x">
+  <div class="w-row">
+    <div class="w-msg">
+      <strong>&#9888;&#xFE0F; 2026.14.x firmware enforcement active.</strong>
+      Tesla added a preflight check in 2026.14.x that disables autosteer
+      the moment any CAN frame touches <code>0x3FD</code>. Symptom on
+      the dash: <em>"Autopilot turning off"</em> appears within a second
+      of stalk engagement, then AP immediately disengages. Listen-Only
+      mode is safe. Enable <strong>AP-First</strong> in settings to delay
+      injection until AP is engaged. Dismiss if you're on pre-14.x firmware.
+    </div>
+    <button class="w-dismiss" onclick="cmd('14x_warning',false)">Dismiss</button>
+  </div>
+</div>
 
 <!-- FSD Status -->
 <div class="card">
@@ -327,8 +354,8 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
   <div class="card-head"><div class="icon ic-d">C</div><h2>CAN Bus</h2></div>
   <div class="sg">
     <div class="sb"><div class="sv" id="rxCnt">0</div><div class="sl">RX Frames</div></div>
-    <div class="sb"><div class="sv" id="txCnt">0</div><div class="sl">TX Modified</div></div>
-    <div class="sb"><div class="sv" id="crcErr">0</div><div class="sl">CAN Errors</div></div>
+    <div class="sb"><div class="sv" id="txCnt">0</div><div class="sl">TX Frames</div></div>
+    <div class="sb"><div class="sv" id="crcErr">0</div><div class="sl">TX Errors</div></div>
     <div class="sb"><div class="sv" id="fps">0.0</div><div class="sl">Frames/s</div></div>
   </div>
 </div>
@@ -365,11 +392,7 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
 <!-- Controls -->
 <div class="card">
   <div class="card-head"><div class="icon ic-c">C</div><h2>Controls</h2></div>
-  <button id="btnMode" class="btn-main btn-act" onclick="toggleMode()">ACTIVATE</button>
-  <div class="row">
-    <span class="lbl">FSD Unlock</span>
-    <label class="sw"><input type="checkbox" id="swFsdUnlock" onchange="cmd('fsd_unlock',this.checked)"><span class="sl2"></span></label>
-  </div>
+  <button id="btnMode" class="btn-main btn-act" onclick="toggleMode()">ACTIVATE FSD</button>
   <div class="row">
     <span class="lbl">Ignore OTA</span>
     <label class="sw"><input type="checkbox" id="swIgnoreOta" onchange="cmd('ignore_ota',this.checked)"><span class="sl2"></span></label>
@@ -574,16 +597,19 @@ function upd(d){
     if(d.ota) otaB.innerHTML=d.ignore_ota?'&#9888;&#xFE0F; OTA UPDATE IN PROGRESS &mdash; TX ALLOWED BY IGNORE OTA':'&#9888;&#xFE0F; OTA UPDATE IN PROGRESS &mdash; CAN TX SUSPENDED';
   }
 
+  // 14.x firmware warning banner
+  var w14x=document.getElementById('warn14x');
+  if(w14x) w14x.style.display=d.firmware_14x_warning?'block':'none';
+
   // Mode button
   var act=d.op_mode===1;
   var btn=document.getElementById('btnMode');
   if(btn){
-    btn.textContent=act?'DEACTIVATE':'ACTIVATE';
+    btn.textContent=act?'STOP FSD  \u2192  Listen-Only':'ACTIVATE FSD  \u2192  Active';
     btn.className='btn-main '+(act?'btn-stop':'btn-act');
   }
 
   // Switches sync
-  if(document.getElementById('swFsdUnlock')) document.getElementById('swFsdUnlock').checked=d.fsd_unlock;
   if(document.getElementById('swIgnoreOta')) document.getElementById('swIgnoreOta').checked=d.ignore_ota;
   if(document.getElementById('swNag')) document.getElementById('swNag').checked=d.nag_killer;
   if(document.getElementById('swBms')) document.getElementById('swBms').checked=d.bms_output;
@@ -717,7 +743,7 @@ function confirmRestart(){
 function requestRestart(){
   fetch('/restart',{headers:{Authorization:authHeader}}).then(function(r){
     if(!r.ok){authHeader='';requireAuth(function(){showRestartConfirm(restartAnchor);},restartAnchor);return;}
-    alert('Device restart requested');
+    alert('Device restart triggered');
     setTimeout(function(){location.reload();},8000);
   }).catch(function(){setTimeout(function(){location.reload();},8000);});
 }
@@ -1085,7 +1111,7 @@ static String build_json() {
         (state.hw_version == TeslaHW_Legacy) ? "Legacy: DAS 0x399" :
         "Waiting for HW detection";
 
-    j.reserve(1024);
+    j.reserve(900);
     j  = "{";
     j += "\"fsd_enabled\":";   j += state.fsd_enabled                 ? "true" : "false"; j += ',';
     j += "\"ap_active\":";     j += state.ap_active                   ? "true" : "false"; j += ',';
@@ -1094,7 +1120,6 @@ static String build_json() {
     j += "\"ota\":";           j += state.tesla_ota_in_progress        ? "true" : "false"; j += ',';
     j += "\"ap_das_profile\":\""; j += ap_das_profile;                 j += "\",";
     j += "\"isa_speed_enabled\":"; j += isa_speed_enabled              ? "true" : "false"; j += ',';
-    j += "\"fsd_unlock\":";    j += state.fsd_unlock                   ? "true" : "false"; j += ',';
     j += "\"ignore_ota\":";    j += state.ignore_ota                   ? "true" : "false"; j += ',';
     j += "\"nag_killer\":";    j += state.nag_killer                   ? "true" : "false"; j += ',';
     j += "\"bms_output\":";    j += state.bms_output                   ? "true" : "false"; j += ',';
@@ -1102,6 +1127,7 @@ static String build_json() {
     j += "\"china_mode\":";    j += state.china_mode                   ? "true" : "false"; j += ',';
     j += "\"suppress_speed_chime\":"; j += state.suppress_speed_chime  ? "true" : "false"; j += ',';
     j += "\"tlssc_restore\":"; j += state.tlssc_restore                ? "true" : "false"; j += ',';
+    j += "\"firmware_14x_warning\":"; j += state.firmware_14x_warning  ? "true" : "false"; j += ',';
 #if defined(BOARD_TTGO_DISPLAY)
     j += "\"display_enabled\":"; j += state.display_enabled             ? "true" : "false"; j += ',';
     j += "\"display_brightness\":"; j += state.display_brightness;      j += ',';
@@ -1170,24 +1196,12 @@ static void ws_event(uint8_t num, WStype_t type,
         }
         saved = *g_state;
         state_exit();
-        for (uint8_t i = 0; g_can_buses && i < g_can_count; i++) {
+        for (uint8_t i = 0; i < g_can_count; i++) {
             if (g_can_buses[i]) g_can_buses[i]->setListenOnly(!active);
         }
         http_can_stream_set_enabled(!active);
         Serial.println(active ? "[Web] → Active mode" : "[Web] → Listen-Only mode");
         prefs_save(&saved);
-    } else if (strstr(buf, "\"fsd_unlock\"")) {
-        if (vptr) {
-            while (*vptr == ' ' || *vptr == ':') vptr++;
-            bool enabled = (strncmp(vptr, "true", 4) == 0);
-            FSDState saved;
-            state_enter();
-            g_state->fsd_unlock = enabled;
-            saved = *g_state;
-            state_exit();
-            Serial.printf("[Web] FSD Unlock: %s\n", enabled ? "ON" : "OFF");
-            prefs_save(&saved);
-        }
     } else if (strstr(buf, "\"ignore_ota\"")) {
         if (vptr) {
             while (*vptr == ' ' || *vptr == ':') vptr++;
@@ -1275,6 +1289,18 @@ static void ws_event(uint8_t num, WStype_t type,
             saved = *g_state;
             state_exit();
             Serial.printf("[Web] TLSSC Restore: %s\n", enabled ? "ON" : "OFF");
+            prefs_save(&saved);
+        }
+    } else if (strstr(buf, "\"14x_warning\"")) {
+        if (vptr) {
+            while (*vptr == ' ' || *vptr == ':') vptr++;
+            bool enabled = (strncmp(vptr, "true", 4) == 0);
+            FSDState saved;
+            state_enter();
+            g_state->firmware_14x_warning = enabled;
+            saved = *g_state;
+            state_exit();
+            Serial.printf("[Web] 14.x Warning: %s\n", enabled ? "ON" : "OFF");
             prefs_save(&saved);
         }
     } else if (strstr(buf, "\"force_fsd\"")) {

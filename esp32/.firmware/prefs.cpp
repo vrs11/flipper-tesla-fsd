@@ -12,7 +12,6 @@ void prefs_load(FSDState *state) {
         return;
     }
     state->nag_killer               = g_prefs.getBool("nag",    true);
-    state->fsd_unlock               = g_prefs.getBool("unlock", true);
     state->suppress_speed_chime     = g_prefs.getBool("chime",  true);
     state->ignore_ota               = g_prefs.getBool("ignota", false);
     state->force_fsd                = g_prefs.getBool("force",  false);
@@ -21,6 +20,7 @@ void prefs_load(FSDState *state) {
     state->precondition             = g_prefs.getBool("precond",false);
     state->emergency_vehicle_detect = g_prefs.getBool("emrg",   false);
     state->bms_output               = g_prefs.getBool("bms",    false);
+    state->firmware_14x_warning     = g_prefs.getBool("14x",    true);
 #if defined(BOARD_TTGO_DISPLAY)
     state->display_enabled          = g_prefs.getBool("disp",   true);
     state->display_brightness       = g_prefs.getUChar("disp_br", 50);
@@ -35,8 +35,8 @@ void prefs_load(FSDState *state) {
 
     state->op_mode = (OpMode)g_prefs.getUChar("mode", (uint8_t)OpMode_ListenOnly);
     
-    Serial.printf("[NVS] Loaded: Unlock=%d NAG=%d IgnoreOTA=%d China=%d Chime=%d Sleep=%u SSID=\"%s\" HIDDEN=%d\n",
-                  state->fsd_unlock, state->nag_killer, state->ignore_ota,
+    Serial.printf("[NVS] Loaded: NAG=%d IgnoreOTA=%d China=%d Chime=%d Sleep=%u SSID=\"%s\" HIDDEN=%d\n",
+                  state->nag_killer, state->ignore_ota,
                   state->china_mode, state->suppress_speed_chime,
                   state->sleep_idle_ms, state->wifi_ssid, state->wifi_hidden);
     g_prefs.end();
@@ -53,7 +53,6 @@ void prefs_save(const FSDState *state) {
     g_prefs.begin(NS, /*readOnly=*/false);
     g_prefs.putBool("ok",     true);
     g_prefs.putBool("nag",    state->nag_killer);
-    g_prefs.putBool("unlock", state->fsd_unlock);
     g_prefs.putBool("chime",  state->suppress_speed_chime);
     g_prefs.putBool("ignota", state->ignore_ota);
     g_prefs.putBool("force",  state->force_fsd);
@@ -62,6 +61,7 @@ void prefs_save(const FSDState *state) {
     g_prefs.putBool("precond",state->precondition);
     g_prefs.putBool("emrg",   state->emergency_vehicle_detect);
     g_prefs.putBool("bms",    state->bms_output);
+    g_prefs.putBool("14x",    state->firmware_14x_warning);
 #if defined(BOARD_TTGO_DISPLAY)
     g_prefs.putBool("disp",   state->display_enabled);
     g_prefs.putUChar("disp_br", state->display_brightness);
@@ -76,8 +76,8 @@ void prefs_save(const FSDState *state) {
 
     g_prefs.putUChar("mode",  (uint8_t)state->op_mode);
     
-    Serial.printf("[NVS] Saved: Unlock=%d NAG=%d IgnoreOTA=%d China=%d Chime=%d Sleep=%u SSID=\"%s\" HIDDEN=%d\n",
-                  state->fsd_unlock, state->nag_killer, state->ignore_ota,
+    Serial.printf("[NVS] Saved: NAG=%d IgnoreOTA=%d China=%d Chime=%d Sleep=%u SSID=\"%s\" HIDDEN=%d\n",
+                  state->nag_killer, state->ignore_ota,
                   state->china_mode, state->suppress_speed_chime,
                   state->sleep_idle_ms, state->wifi_ssid, state->wifi_hidden);
     g_prefs.end();

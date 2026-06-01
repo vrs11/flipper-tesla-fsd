@@ -93,8 +93,8 @@
 #define PRECONDITION_TX_BUS_INDEX 0
 #endif
 
-// MCP2515 oscillator. Generic breakout modules often use 8 MHz; the LilyGO
-// T-2CAN onboard MCP2515 follows the autowp library's 16 MHz default.
+// MCP2515 oscillator. Generic breakout modules often use 8 MHz; LilyGO
+// T-2CAN's onboard MCP2515 uses a 16 MHz crystal.
 #ifndef MCP_CRYSTAL_MHZ
 #define MCP_CRYSTAL_MHZ  MCP_8MHZ   // from autowp-mcp2515 CAN_CLOCK enum
 #endif

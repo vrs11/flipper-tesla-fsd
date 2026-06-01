@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include "can_driver.h"
 #include "fsd_handler.h"
+#include "can_driver.h"
 
 /**
  * can_dump.h — SD-card CAN bus logger (Lilygo T-CAN485)

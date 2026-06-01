@@ -53,11 +53,10 @@ All CAN protocol handling from hypery11's Flipper Zero implementation (`fsd_hand
 - **FSD Status Panel** — FSD active/waiting, Listen-Only/Active mode, HW version, NAG Killer state
 - **Battery SOC Ring** — animated circular progress bar with color coding (green >60%, yellow >30%, red ≤30%)
 - **BMS Live Data UI hooks** — fields exist in UI/API, but BMS section is currently not working reliably on tested vehicle setup
-- **CAN Bus Stats** — RX frame count, TX modified count, CAN driver errors, frames/second
+- **CAN Bus Stats** — RX frame count, TX modified count, CRC errors, frames/second
 - **HTTP CAN Log Stream** — phone-friendly candump collection via dashboard button; device streams CAN frames over HTTP on port 82 and the browser saves the collected `.dump` file on Stop
 - **Web Controls** — toggle buttons for:
-  - Activate/Deactivate (Listen-Only ↔ Active mode switch)
-  - FSD Unlock on/off (allows Active mode without modifying autopilot FSD unlock frames)
+  - Activate/Stop FSD (Listen-Only ↔ Active mode switch)
   - Ignore OTA on/off (allows Active mode TX during a detected Tesla OTA)
   - NAG Killer on/off
   - BMS serial output on/off
@@ -102,7 +101,7 @@ This avoids a manual AP/DAS profile. The dashboard hides the chime toggle until 
 | **OTA Protection** | `0x318` | Auto-stops TX when OTA update detected unless Ignore OTA is enabled |
 | **HW Auto-Detect** | `0x398` | Reads GTW_carConfig for HW version |
 | **Listen-Only Mode** | — | Default on boot, passive monitoring only |
-| **Wiring Check** | — | rx_count + CAN error monitoring |
+| **Wiring Check** | — | rx_count + CRC error monitoring |
 | **WiFi Dashboard** | — | Real-time web UI at 192.168.4.1 |
 
 ---
@@ -291,7 +290,7 @@ pio device monitor -b 115200
 | 🔵 Blue | Listen-Only (passive monitoring) |
 | 🟢 Green | Active (FSD enabled, transmitting) |
 | 🟡 Yellow | OTA detected |
-| 🔴 Red | Error (no CAN signal / CAN errors) |
+| 🔴 Red | Error (no CAN signal / CRC errors) |
 
 ### WiFi Dashboard
 
@@ -308,7 +307,7 @@ pio device monitor -b 115200
 
 - **OTA Protection** — automatically stops all CAN TX when a software update is detected on `0x318`; Ignore OTA can override this in Active mode
 - **Listen-Only default** — device will not modify any CAN frames until explicitly switched to Active mode
-- **Wiring diagnostics** — monitors rx_count and CAN driver error counter; red LED if no CAN traffic
+- **Wiring diagnostics** — monitors rx_count and CRC error counter; red LED if no CAN traffic
 - **DLC validation** — checks frame data length before parsing to prevent buffer overflows
 - **Unplug = reset** — remove the device and restart the car to clear any modified state
 - **WiFi isolated** — AP mode only, no internet connection, no data leaves the device
@@ -337,7 +336,7 @@ esp32/
 ├── .firmware/
 │   ├── main.cpp            — Init, button handling, main loop
 │   ├── fsd_handler.cpp/h   — CAN protocol logic (ported from hypery11)
-│   ├── can_signals.h       — Signal byte/bit/mask constants
+│   ├── http_can_stream.cpp/h — HTTP candump-compatible CAN stream
 │   ├── can_driver.cpp/h    — CAN driver abstraction (TWAI / MCP2515)
 │   ├── wifi_manager.cpp/h  — WiFi AP setup
 │   ├── web_dashboard.cpp/h — HTTP server + WebSocket + embedded UI
