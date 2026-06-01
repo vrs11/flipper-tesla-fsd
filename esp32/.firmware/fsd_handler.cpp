@@ -59,6 +59,8 @@ void fsd_state_init(FSDState *state, TeslaHWVersion hw) {
     strncpy(state->wifi_ssid, "Tesla-FSD", sizeof(state->wifi_ssid));
     strncpy(state->wifi_pass, "12345678",  sizeof(state->wifi_pass));
     state->wifi_hidden = false;
+    state->wifi_sta_ssid[0] = '\0';
+    state->wifi_sta_pass[0] = '\0';
 }
 
 void fsd_apply_hw_version(FSDState *state, TeslaHWVersion hw) {
@@ -403,10 +405,12 @@ void fsd_handle_bms_hv(FSDState *state, const CanFrame *frame) {
 }
 
 void fsd_handle_bms_soc(FSDState *state, const CanFrame *frame) {
-    if (frame->dlc < 2) return;
-    // SoC: 10-bit little-endian (bits 9:0 across bytes 1:0), LSB = 0.1 %
-    uint16_t raw = ((uint16_t)(frame->data[SIG_BMS_SOC_H_BYTE] & SIG_BMS_SOC_H_MASK) << 8) |
-                   frame->data[SIG_BMS_SOC_L_BYTE];
+    if (frame->dlc < 3) return;
+    // Car display SOC: SOCUI292, bit10|10, LSB = 0.1 %.
+    uint16_t raw =
+        (((uint16_t)frame->data[SIG_BMS_SOC_UI_HIGH_BYTE] << (8 - SIG_BMS_SOC_UI_LOW_SHIFT)) |
+         (frame->data[SIG_BMS_SOC_UI_LOW_BYTE] >> SIG_BMS_SOC_UI_LOW_SHIFT)) &
+        SIG_BMS_SOC_UI_MASK;
     state->soc_percent = raw * SIG_BMS_SOC_SCALE;
     state->bms_seen = true;
 }
@@ -453,6 +457,15 @@ static void fsd_handle_das_status_common(FSDState *state, const CanFrame *frame)
 
     state->das_speed_limit_1 = frame->data[SIG_DAS_SPEED_LIMIT_BYTE_1];
     state->das_speed_limit_2 = frame->data[SIG_DAS_SPEED_LIMIT_BYTE_2];
+    uint8_t vision_raw =
+        frame->data[SIG_DAS_VISION_SPEED_LIMIT_BYTE] & SIG_DAS_VISION_SPEED_LIMIT_MASK;
+    if (vision_raw != 0u && vision_raw != SIG_DAS_VISION_SPEED_LIMIT_NONE) {
+        state->vision_speed_limit_kph =
+            (float)vision_raw * SIG_DAS_VISION_SPEED_LIMIT_SCALE_KPH;
+        state->speed_limit_kph = state->vision_speed_limit_kph;
+        state->speed_limit_source = SpeedLimitSource_Vision;
+        state->speed_limit_seen = true;
+    }
 
     // DAS_autopilotHandsOnState: byte5 bits[5:2].
     state->das_hands_on_state =
@@ -462,6 +475,7 @@ static void fsd_handle_das_status_common(FSDState *state, const CanFrame *frame)
     state->das_counter = frame->data[SIG_DAS_COUNTER_BYTE];
     state->das_checksum = frame->data[SIG_DAS_CHECKSUM_BYTE];
     state->das_seen = true;
+    state->ap_ready = state->das_ap_state == 2u;
 }
 
 // ── DAS status — nag killer gating / AP active status ────────────────────────
@@ -486,4 +500,201 @@ void fsd_handle_das_status_hw4(FSDState *state, const CanFrame *frame) {
         SIG_DAS_HW4_AP_STATE_MASK;
     state->ap_active = state->das_ap_state >= SIG_DAS_HW4_AP_ACTIVE_MIN;
     fsd_handle_das_status_common(state, frame);
+}
+
+void fsd_handle_sccm_left_stalk(FSDState *state, const CanFrame *frame, uint32_t now_ms) {
+    if (frame->dlc < 3) return;
+    uint8_t turn =
+        frame->data[SIG_SCCM_LSTALK_TURN_BYTE] & SIG_SCCM_LSTALK_TURN_MASK;
+
+    switch (turn) {
+        case SIG_SCCM_TURN_DOWN_0_5:
+        case SIG_SCCM_TURN_DOWN_1:
+            state->turn_down_light_ms = now_ms;
+            break;
+        case SIG_SCCM_TURN_DOWN_1_5:
+        case SIG_SCCM_TURN_DOWN_2:
+            state->turn_down_hard_ms = now_ms;
+            break;
+        case SIG_SCCM_TURN_UP_0_5:
+        case SIG_SCCM_TURN_UP_1:
+            state->turn_up_light_ms = now_ms;
+            break;
+        case SIG_SCCM_TURN_UP_1_5:
+        case SIG_SCCM_TURN_UP_2:
+            state->turn_up_hard_ms = now_ms;
+            break;
+        default:
+            break;
+    }
+}
+
+static bool frame_payload_matches(const CanFrame *frame, const uint8_t expected[CAN_FRAME_MAX_DATA_LEN]) {
+    if (frame->dlc != CAN_FRAME_MAX_DATA_LEN) return false;
+    for (uint8_t i = 0; i < CAN_FRAME_MAX_DATA_LEN; i++) {
+        if (frame->data[i] != expected[i]) return false;
+    }
+    return true;
+}
+
+static bool action_pulse_due(uint32_t now_ms, uint32_t last_ms) {
+    return last_ms == 0u || (uint32_t)(now_ms - last_ms) > 300u;
+}
+
+void fsd_handle_stalk_action(FSDState *state, const CanFrame *frame, uint32_t now_ms) {
+    static const uint8_t FULL_UP[CAN_FRAME_MAX_DATA_LEN]    = {0x0Au, 0x04u, 0, 0, 0, 0, 0, 0};
+    static const uint8_t FULL_DOWN[CAN_FRAME_MAX_DATA_LEN]  = {0x05u, 0x00u, 0, 0, 0, 0, 0, 0};
+    static const uint8_t LIGHT_UP[CAN_FRAME_MAX_DATA_LEN]   = {0x08u, 0x00u, 0, 0, 0, 0, 0, 0};
+    static const uint8_t LIGHT_DOWN[CAN_FRAME_MAX_DATA_LEN] = {0x04u, 0x00u, 0, 0, 0, 0, 0, 0};
+
+    if (frame->dlc != CAN_FRAME_MAX_DATA_LEN) return;
+
+    uint8_t code = frame->data[0];
+    if (frame->data[1] == 0x04u && code == 0x0Au) {
+        code = 0x0Au;
+    } else if (frame->data[1] != 0u ||
+               frame->data[2] != 0u ||
+               frame->data[3] != 0u ||
+               frame->data[4] != 0u ||
+               frame->data[5] != 0u ||
+               frame->data[6] != 0u ||
+               frame->data[7] != 0u) {
+        return;
+    }
+
+    bool changed = !state->stalk_action_seen || state->stalk_action_last_code != code;
+    state->stalk_action_seen = true;
+    state->stalk_action_last_code = code;
+    if (!changed) return;
+
+    if (frame_payload_matches(frame, FULL_UP)) {
+        if (action_pulse_due(now_ms, state->stalk_full_up_ms)) {
+            state->stalk_full_up_ms = now_ms;
+        }
+    } else if (frame_payload_matches(frame, FULL_DOWN)) {
+        if (action_pulse_due(now_ms, state->stalk_full_down_ms)) {
+            state->stalk_full_down_ms = now_ms;
+        }
+    } else if (frame_payload_matches(frame, LIGHT_UP)) {
+        if (action_pulse_due(now_ms, state->stalk_light_up_ms)) {
+            state->stalk_light_up_ms = now_ms;
+        }
+    } else if (frame_payload_matches(frame, LIGHT_DOWN)) {
+        if (action_pulse_due(now_ms, state->stalk_light_down_ms)) {
+            state->stalk_light_down_ms = now_ms;
+        }
+    }
+}
+
+void fsd_handle_ui_map_data(FSDState *state, const CanFrame *frame, uint32_t now_ms) {
+    if (frame->dlc < 2) return;
+    uint8_t raw =
+        frame->data[SIG_UI_MAP_SPEED_LIMIT_BYTE] & SIG_UI_MAP_SPEED_LIMIT_MASK;
+    if (raw == SIG_UI_MAP_SPEED_LIMIT_UNKNOWN ||
+        raw == SIG_UI_MAP_SPEED_LIMIT_UNLIMITED ||
+        raw == SIG_UI_MAP_SPEED_LIMIT_SNA) {
+        return;
+    }
+
+    if (raw == 1u) {
+        state->map_speed_limit_kph = 5.0f;
+    } else if (raw == SIG_UI_MAP_SPEED_LIMIT_7_KPH) {
+        state->map_speed_limit_kph = 7.0f;
+    } else {
+        state->map_speed_limit_kph = (float)(raw - 1u) * 5.0f;
+    }
+    state->speed_limit_kph = state->map_speed_limit_kph;
+    state->speed_limit_source = SpeedLimitSource_Map;
+    state->speed_limit_seen = true;
+    state->speed_limit_last_ms = now_ms;
+}
+
+void fsd_handle_das_status2(FSDState *state, const CanFrame *frame, uint32_t now_ms) {
+    if (frame->dlc < 2) return;
+    uint16_t raw =
+        ((uint16_t)(frame->data[SIG_DAS_ACC_SPEED_LIMIT_HIGH_BYTE] &
+                    SIG_DAS_ACC_SPEED_LIMIT_HIGH_MASK) << 8) |
+        frame->data[SIG_DAS_ACC_SPEED_LIMIT_LOW_BYTE];
+    if (raw == SIG_DAS_ACC_SPEED_LIMIT_NONE || raw == SIG_DAS_ACC_SPEED_LIMIT_SNA) return;
+
+    float kph = (float)raw * SIG_DAS_ACC_SPEED_LIMIT_SCALE_MPH * MPH_TO_KPH;
+    state->acc_speed_limit_kph = kph;
+    if (!state->speed_limit_seen || state->speed_limit_source == SpeedLimitSource_None) {
+        state->speed_limit_kph = kph;
+        state->speed_limit_source = SpeedLimitSource_Acc;
+        state->speed_limit_seen = true;
+        state->speed_limit_last_ms = now_ms;
+    }
+}
+
+void fsd_handle_das_control(FSDState *state, const CanFrame *frame) {
+    if (frame->dlc < 2) return;
+    uint16_t raw =
+        ((uint16_t)(frame->data[SIG_DAS_CONTROL_SET_SPEED_HIGH_BYTE] &
+                    SIG_DAS_CONTROL_SET_SPEED_HIGH_MASK) << 8) |
+        frame->data[SIG_DAS_CONTROL_SET_SPEED_LOW_BYTE];
+    if (raw == SIG_DAS_CONTROL_SET_SPEED_SNA) return;
+
+    state->cruise_set_speed_kph = (float)raw * SIG_DAS_CONTROL_SET_SPEED_SCALE_KPH;
+    state->cruise_set_speed_seen = true;
+}
+
+void fsd_handle_vcfront_lighting(FSDState *state, const CanFrame *frame) {
+    if (frame->dlc < 1) return;
+    uint8_t left_request =
+        (frame->data[0] >> SIG_VCFRONT_INDICATOR_LEFT_SHIFT) & SIG_VCFRONT_INDICATOR_MASK;
+    uint8_t right_request =
+        (frame->data[0] >> SIG_VCFRONT_INDICATOR_RIGHT_SHIFT) & SIG_VCFRONT_INDICATOR_MASK;
+
+    state->left_turn_active = left_request != SIG_VCFRONT_INDICATOR_OFF;
+    state->right_turn_active = right_request != SIG_VCFRONT_INDICATOR_OFF;
+    state->left_turn_status_seen = true;
+    state->right_turn_status_seen = true;
+    state->turn_status_seen = true;
+}
+
+void fsd_build_right_scroll_frame(CanFrame *frame, int8_t ticks) {
+    memset(frame, 0, sizeof(CanFrame));
+    frame->id = CAN_ID_VCLEFT_SWITCH;
+    frame->dlc = 8;
+    // Neutral observed payload: 29 55 00 00 00 00 00 80.
+    frame->data[0] = VCLEFT_RIGHT_SCROLL_BYTE0; // mux=1 plus neutral left/right wheel switch states.
+    frame->data[1] = VCLEFT_RIGHT_SCROLL_BYTE1;
+    frame->data[2] = 0x00u;
+    frame->data[3] = (uint8_t)ticks & SIG_VCLEFT_RIGHT_SCROLL_MASK;
+    frame->data[7] = VCLEFT_RIGHT_SCROLL_BYTE7;
+}
+
+void fsd_build_stalk_action_frame(CanFrame *frame, uint8_t action) {
+    memset(frame, 0, sizeof(CanFrame));
+    frame->id = CAN_ID_STALK_ACTION;
+    frame->dlc = CAN_FRAME_MAX_DATA_LEN;
+    frame->data[0] = action;
+}
+
+void fsd_set_das_control_speed(CanFrame *frame, float speed_kph) {
+    if (frame->dlc < CAN_FRAME_MAX_DATA_LEN) return;
+    if (speed_kph < 0.0f) speed_kph = 0.0f;
+    if (speed_kph > 409.4f) speed_kph = 409.4f;
+    uint16_t raw = (uint16_t)(speed_kph / SIG_DAS_CONTROL_SET_SPEED_SCALE_KPH + 0.5f);
+    if (raw > 0x0FFEu) raw = 0x0FFEu;
+
+    frame->data[SIG_DAS_CONTROL_SET_SPEED_LOW_BYTE] = (uint8_t)(raw & 0xFFu);
+    frame->data[SIG_DAS_CONTROL_SET_SPEED_HIGH_BYTE] =
+        (frame->data[SIG_DAS_CONTROL_SET_SPEED_HIGH_BYTE] &
+         (uint8_t)(~SIG_DAS_CONTROL_SET_SPEED_HIGH_MASK)) |
+        (uint8_t)((raw >> 8) & SIG_DAS_CONTROL_SET_SPEED_HIGH_MASK);
+
+    uint8_t counter =
+        (frame->data[SIG_DAS_CONTROL_COUNTER_BYTE] >> SIG_DAS_CONTROL_COUNTER_SHIFT) &
+        SIG_DAS_CONTROL_COUNTER_MASK;
+    counter = (counter + 1u) & SIG_DAS_CONTROL_COUNTER_MASK;
+    frame->data[SIG_DAS_CONTROL_COUNTER_BYTE] =
+        (frame->data[SIG_DAS_CONTROL_COUNTER_BYTE] & SIG_DAS_CONTROL_COUNTER_KEEP_MASK) |
+        (uint8_t)(counter << SIG_DAS_CONTROL_COUNTER_SHIFT);
+
+    uint16_t sum = 0;
+    for (int i = 0; i < 7; i++) sum += frame->data[i];
+    sum += (CAN_ID_DAS_CONTROL & 0xFFu) + (CAN_ID_DAS_CONTROL >> 8);
+    frame->data[SIG_DAS_CONTROL_CHECKSUM_BYTE] = (uint8_t)(sum & 0xFFu);
 }

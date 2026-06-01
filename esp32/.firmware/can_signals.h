@@ -103,9 +103,10 @@
 #define SIG_BMS_CURRENT_L_BYTE              2
 #define SIG_BMS_CURRENT_H_BYTE              3
 #define SIG_BMS_CURRENT_SCALE             0.1f
-#define SIG_BMS_SOC_L_BYTE                  0
-#define SIG_BMS_SOC_H_BYTE                  1
-#define SIG_BMS_SOC_H_MASK               0x03u
+#define SIG_BMS_SOC_UI_LOW_BYTE             1
+#define SIG_BMS_SOC_UI_HIGH_BYTE            2
+#define SIG_BMS_SOC_UI_LOW_SHIFT            2
+#define SIG_BMS_SOC_UI_MASK              0x03FFu
 #define SIG_BMS_SOC_SCALE                 0.1f
 #define SIG_BMS_TEMP_MIN_BYTE               4
 #define SIG_BMS_TEMP_MAX_BYTE               5
@@ -144,3 +145,88 @@
 #define SIG_DAS_CHECKSUM_BYTE               7
 #define SIG_DAS_HANDS_ON_NOT_REQUIRED       0u
 #define SIG_DAS_HANDS_ON_SUSPENDED          8u
+
+// ── Temporary action-test dashboard signals ─────────────────────────────────
+// SCCMLeftStalk (0x249), little-endian:
+//   turnIndicatorStalkStatus: bit16|4
+#define SIG_SCCM_LSTALK_TURN_BYTE           2
+#define SIG_SCCM_LSTALK_TURN_MASK        0x0Fu
+#define SIG_SCCM_TURN_IDLE                  0u
+#define SIG_SCCM_TURN_UP_0_5                1u
+#define SIG_SCCM_TURN_UP_1                  2u
+#define SIG_SCCM_TURN_UP_1_5                3u
+#define SIG_SCCM_TURN_UP_2                  4u
+#define SIG_SCCM_TURN_DOWN_0_5              5u
+#define SIG_SCCM_TURN_DOWN_1                6u
+#define SIG_SCCM_TURN_DOWN_1_5              7u
+#define SIG_SCCM_TURN_DOWN_2                8u
+
+// GearLever / right stalk (0x229), little-endian:
+//   GearLeverPosition229: bit12|3
+#define SIG_GEAR_LEVER_POS_BYTE             1
+#define SIG_GEAR_LEVER_POS_SHIFT            4
+#define SIG_GEAR_LEVER_POS_MASK          0x07u
+#define SIG_GEAR_LEVER_CENTER               0u
+#define SIG_GEAR_LEVER_HALF_DOWN            1u
+#define SIG_GEAR_LEVER_FULL_DOWN            2u
+
+// VCLEFT_switchStatus (0x3C2), little-endian:
+//   mux: bit0|2, swcRightScrollTicks: bit24|6 signed
+#define SIG_VCLEFT_SWITCH_MUX_BYTE          0
+#define SIG_VCLEFT_SWITCH_MUX_MASK       0x03u
+#define SIG_VCLEFT_SWITCH_MUX_WHEEL         1u
+#define SIG_VCLEFT_RIGHT_SCROLL_BYTE        3
+#define SIG_VCLEFT_RIGHT_SCROLL_MASK     0x3Fu
+
+// VCFRONT_lighting (0x3F5), little-endian:
+//   indicatorLeftRequest: bit0|2, indicatorRightRequest: bit2|2.
+//   0=off, 1=active low, 2=active high.
+#define SIG_VCFRONT_INDICATOR_LEFT_SHIFT    0
+#define SIG_VCFRONT_INDICATOR_RIGHT_SHIFT   2
+#define SIG_VCFRONT_INDICATOR_MASK       0x03u
+#define SIG_VCFRONT_INDICATOR_OFF           0u
+
+// UI_driverAssistMapData (0x238), little-endian:
+//   UI_mapSpeedLimit: bit8|5. DBC values are enum buckets:
+//   1=5, 2=7, 3=10, 4=15, ... 29=160, 30=unlimited, 31=SNA.
+#define SIG_UI_MAP_SPEED_LIMIT_BYTE         1
+#define SIG_UI_MAP_SPEED_LIMIT_MASK      0x1Fu
+#define SIG_UI_MAP_SPEED_LIMIT_UNKNOWN      0u
+#define SIG_UI_MAP_SPEED_LIMIT_7_KPH        2u
+#define SIG_UI_MAP_SPEED_LIMIT_UNLIMITED   30u
+#define SIG_UI_MAP_SPEED_LIMIT_SNA         31u
+
+// DAS_status / AutopilotStatus vision speed limit:
+//   DAS_visionOnlySpeedLimit: bit16|5, 0=unknown, 31=none.
+#define SIG_DAS_VISION_SPEED_LIMIT_BYTE     2
+#define SIG_DAS_VISION_SPEED_LIMIT_MASK  0x1Fu
+#define SIG_DAS_VISION_SPEED_LIMIT_NONE    31u
+#define SIG_DAS_VISION_SPEED_LIMIT_SCALE_KPH 5.0f
+
+// DAS_status2 (0x389), little-endian:
+//   DAS_accSpeedLimit: bit0|10, factor 0.2 mph.
+#define SIG_DAS_ACC_SPEED_LIMIT_LOW_BYTE    0
+#define SIG_DAS_ACC_SPEED_LIMIT_HIGH_BYTE   1
+#define SIG_DAS_ACC_SPEED_LIMIT_HIGH_MASK 0x03u
+#define SIG_DAS_ACC_SPEED_LIMIT_NONE        0u
+#define SIG_DAS_ACC_SPEED_LIMIT_SNA      1023u
+#define SIG_DAS_ACC_SPEED_LIMIT_SCALE_MPH   0.2f
+#define MPH_TO_KPH                          1.609344f
+
+// DAS_control (0x2B9), little-endian:
+//   DAS_setSpeed: bit0|12, factor 0.1 kph.
+//   DAS_accState: bit12|4.
+//   DAS_controlCounter: bit53|3.
+//   DAS_controlChecksum: byte7, sum(byte0..6 + id low/high).
+#define SIG_DAS_CONTROL_SET_SPEED_LOW_BYTE  0
+#define SIG_DAS_CONTROL_SET_SPEED_HIGH_BYTE 1
+#define SIG_DAS_CONTROL_SET_SPEED_HIGH_MASK 0x0Fu
+#define SIG_DAS_CONTROL_SET_SPEED_SNA    0x0FFFu
+#define SIG_DAS_CONTROL_SET_SPEED_SCALE_KPH 0.1f
+#define SIG_DAS_CONTROL_ACC_STATE_SHIFT     4
+#define SIG_DAS_CONTROL_ACC_STATE_MASK   0x0Fu
+#define SIG_DAS_CONTROL_COUNTER_BYTE        6
+#define SIG_DAS_CONTROL_COUNTER_SHIFT       5
+#define SIG_DAS_CONTROL_COUNTER_MASK     0x07u
+#define SIG_DAS_CONTROL_COUNTER_KEEP_MASK 0x1Fu
+#define SIG_DAS_CONTROL_CHECKSUM_BYTE       7

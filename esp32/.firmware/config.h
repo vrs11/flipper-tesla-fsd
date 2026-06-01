@@ -7,8 +7,16 @@
 #define CAN_ID_BMS_SOC        0x292u  // 658  - BMS_socStatus:   state of charge
 #define CAN_ID_BMS_THERMAL    0x312u  // 786  - BMS_thermalStatus: battery temp
 #define CAN_ID_GTW_CAR_STATE  0x318u  // 792  - GTW_carState:    OTA detection
+#define CAN_ID_UI_MAP_DATA    0x238u  // 568  - UI_driverAssistMapData: map speed limit
+#define CAN_ID_SCCM_RSTALK    0x229u  // 553  - GearLever / right stalk
+#define CAN_ID_SCCM_LSTALK    0x249u  // 585  - SCCM left stalk turn indicators
+#define CAN_ID_DAS_CONTROL    0x2B9u  // 697  - DAS_control: cruise set speed / ACC state
+#define CAN_ID_DAS_STATUS2    0x389u  // 905  - DAS_status2: ACC speed limit
+#define CAN_ID_STALK_ACTION   0x340u  // 832  - raw stalk action markers observed from road tests
 #define CAN_ID_EPAS_STATUS    0x370u  // 880  - EPAS3P_sysStatus: nag killer target
 #define CAN_ID_GTW_CAR_CONFIG 0x398u  // 920  - GTW_carConfig:   HW version detection
+#define CAN_ID_VCLEFT_SWITCH  0x3C2u  // 962  - VCLEFT_switchStatus: steering wheel controls
+#define CAN_ID_VCFRONT_LIGHT  0x3F5u  // 1013 - VCFRONT_lighting: turn signal request state
 #define CAN_ID_AP_LEGACY      0x3EEu  // 1006 - DAS_autopilot:   Legacy / HW1 / HW2
 #define CAN_ID_FOLLOW_DIST    0x3F8u  // 1016 - DAS_followDistance: speed profile source
 #define CAN_ID_DAS_AP_CONFIG  0x331u  // 817  - DAS autopilot config (tier restore target, ~1 Hz)
@@ -93,8 +101,34 @@
 #define PRECONDITION_TX_BUS_INDEX 0
 #endif
 
-// MCP2515 oscillator. Generic breakout modules often use 8 MHz; LilyGO
-// T-2CAN's onboard MCP2515 uses a 16 MHz crystal.
+// ── Dashboard action TX routing ──────────────────────────────────────────────
+// Bus index: 0=can0, 1=can1. Single-CAN builds only have can0.
+// Observed logs show 0x3C2 right-wheel and 0x2B9 DAS_control on can0.
+#ifndef WHEEL_ACTION_TX_BUS_INDEX
+#define WHEEL_ACTION_TX_BUS_INDEX 0
+#endif
+#ifndef STALK_ACTION_TX_BUS_INDEX
+#define STALK_ACTION_TX_BUS_INDEX 0
+#endif
+#ifndef DAS_CONTROL_ACTION_TX_BUS_INDEX
+#define DAS_CONTROL_ACTION_TX_BUS_INDEX 0
+#endif
+
+// Observed 0x3C2 right-wheel payload shape:
+//   neutral: 29 55 00 00 00 00 00 80
+//   scroll:  byte3 contains signed 6-bit tick count, no CRC field observed.
+#ifndef VCLEFT_RIGHT_SCROLL_BYTE0
+#define VCLEFT_RIGHT_SCROLL_BYTE0 0x29u
+#endif
+#ifndef VCLEFT_RIGHT_SCROLL_BYTE1
+#define VCLEFT_RIGHT_SCROLL_BYTE1 0x55u
+#endif
+#ifndef VCLEFT_RIGHT_SCROLL_BYTE7
+#define VCLEFT_RIGHT_SCROLL_BYTE7 0x80u
+#endif
+
+// MCP2515 oscillator. Generic breakout modules often use 8 MHz; the LilyGO
+// T-2CAN onboard MCP2515 follows the autowp library's 16 MHz default.
 #ifndef MCP_CRYSTAL_MHZ
 #define MCP_CRYSTAL_MHZ  MCP_8MHZ   // from autowp-mcp2515 CAN_CLOCK enum
 #endif
@@ -109,6 +143,7 @@
 #define FACTORY_RESET_HOLD_MS   5000u   // Hold duration to arm factory reset
 #define FACTORY_RESET_WINDOW_MS 20000u  // Clean-boot window during which reset is possible
 #define STATUS_PRINT_MS       5000u   // Periodic status line when Active
+#define WIFI_STA_CONNECT_TIMEOUT_MS 10000u  // Try saved infrastructure WiFi before AP fallback
 
 // OTA detection hardening on GTW_carState (0x318)
 // Some firmware versions keep non-zero states when no update is actively running.
