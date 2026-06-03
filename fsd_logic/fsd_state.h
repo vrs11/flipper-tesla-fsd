@@ -14,25 +14,18 @@
 #include <stdint.h>
 
 typedef enum {
-    TestAction_None = 0,
-    TestAction_ShiftFullPress,
-    TestAction_ShiftFullDoublePress,
-    TestAction_RightWheelShort,
-    TestAction_RightWheelBurst,
-    TestAction_SetCruise40,
-    TestAction_EnableAp,
-    TestAction_GearUpHalf,
-    TestAction_GearUpFull,
-    TestAction_GearDownHalf,
-    TestAction_GearDownFull,
-} TestActionRequest;
-
-typedef enum {
     SpeedLimitSource_None = 0,
     SpeedLimitSource_Map,
     SpeedLimitSource_Vision,
     SpeedLimitSource_Acc,
 } SpeedLimitSource;
+
+typedef enum {
+    TestAction_None = 0,
+    TestAction_RightWheelShort,
+    TestAction_RightWheelBurst,
+    TestAction_SetCruise40,
+} TestActionRequest;
 
 typedef struct FSDState {
     TeslaHWVersion hw_version;
@@ -43,11 +36,13 @@ typedef struct FSDState {
     uint32_t frames_modified;
 
     bool force_fsd;
+    bool fsd_unlock;          // enables core 0x3FD/0x3EE FSD activation TX
     bool suppress_speed_chime;
     bool emergency_vehicle_detect;
     bool nag_killer;           // CAN 880 counter echo method
     uint32_t nag_echo_count;
     bool nag_demand_active;    // true while handsOnLevel == 0 or 3 — edge-detect source for on-demand grip pulse
+    bool continuous_ap;         // re-enable AP after AP drops while turn signal is active
 
     // operation mode + diagnostics
     OpMode op_mode;
@@ -74,6 +69,7 @@ typedef struct FSDState {
     uint8_t ui_speed;            // from 0x257 DI_uiSpeed (8-bit, display value)
     uint8_t steering_tune_mode;  // from 0x370 EPAS3S_currentTuneMode (0-6)
     float torsion_bar_torque_nm; // from 0x370 EPAS3S_torsionBarTorque
+    bool torsion_bar_torque_seen;
     bool driver_brake_applied;   // from 0x145 ESP_driverBrakeApply
     bool speed_seen;             // true once we've parsed at least one 0x257
 
@@ -218,21 +214,8 @@ typedef struct FSDState {
     uint8_t das_counter;
     uint8_t das_checksum;
 
-    // Temporary action-test dashboard state (ESP32 road-test diagnostics)
-    uint32_t turn_down_light_ms;
-    uint32_t turn_down_hard_ms;
-    uint32_t turn_up_light_ms;
-    uint32_t turn_up_hard_ms;
+    // Continuous AP / read-only driver-assist state
     uint32_t stalk_full_up_ms;
-    uint32_t stalk_full_down_ms;
-    uint32_t stalk_light_up_ms;
-    uint32_t stalk_light_down_ms;
-    uint8_t stalk_action_last_code;
-    bool stalk_action_seen;
-    uint32_t wheel_up_ms;
-    uint32_t wheel_down_ms;
-    uint32_t wheel_up_burst_ms;
-    uint32_t wheel_down_burst_ms;
     bool ap_ready;
     bool cruise_set_speed_seen;
     float cruise_set_speed_kph;

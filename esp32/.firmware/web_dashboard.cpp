@@ -355,40 +355,8 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
 <div class="card">
   <div class="card-head"><div class="icon ic-c">T</div><h2>Action Test</h2></div>
   <div class="row">
-    <span class="action-dot"><span class="blinkdot" id="tdl"></span>Turn Down Light</span>
-    <span class="action-dot"><span class="blinkdot" id="tdh"></span>Turn Down Hard</span>
-  </div>
-  <div class="row">
-    <span class="action-dot"><span class="blinkdot" id="tul"></span>Turn Up Light</span>
-    <span class="action-dot"><span class="blinkdot" id="tuh"></span>Turn Up Hard</span>
-  </div>
-  <div class="row">
-    <span class="action-dot"><span class="blinkdot" id="sfu"></span>Stalk Full Up</span>
-    <span class="action-dot"><span class="blinkdot" id="sfd"></span>Stalk Full Down</span>
-  </div>
-  <div class="row">
-    <span class="action-dot"><span class="blinkdot" id="slu"></span>Stalk Half Up</span>
-    <span class="action-dot"><span class="blinkdot" id="sld"></span>Stalk Half Down</span>
-  </div>
-  <div class="row">
-    <span class="action-dot"><span class="blinkdot" id="whu"></span>Wheel Up Single</span>
-    <span class="action-dot"><span class="blinkdot" id="whd"></span>Wheel Down Single</span>
-  </div>
-  <div class="row">
-    <span class="action-dot"><span class="blinkdot" id="wbu"></span>Wheel Up Burst</span>
-    <span class="action-dot"><span class="blinkdot" id="wbd"></span>Wheel Down Burst</span>
-  </div>
-  <div class="row">
     <span class="lbl">AP Ready</span>
     <span class="pill off" id="apReady"><span class="pd"></span>--</span>
-  </div>
-  <div class="row">
-    <span class="lbl">Left Turn</span>
-    <span class="pill off" id="leftTurnActive"><span class="pd"></span>--</span>
-  </div>
-  <div class="row">
-    <span class="lbl">Right Turn</span>
-    <span class="pill off" id="rightTurnActive"><span class="pd"></span>--</span>
   </div>
   <div class="row">
     <span class="lbl">Detected Limit</span>
@@ -399,18 +367,11 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
     <span class="metric" id="cruiseSet">--</span>
   </div>
   <div class="action-grid">
-    <button class="test-btn" id="btnShiftFull" onclick="testAction('shift_full')" disabled>SHIFT FULL</button>
-    <button class="test-btn" id="btnShiftDouble" onclick="testAction('shift_double')" disabled>SHIFT DOUBLE</button>
-    <button class="test-btn" onclick="testAction('gear_up_half')">GEAR UP HALF</button>
-    <button class="test-btn" onclick="testAction('gear_up_full')">GEAR UP FULL</button>
-    <button class="test-btn" onclick="testAction('gear_down_half')">GEAR DOWN HALF</button>
-    <button class="test-btn" onclick="testAction('gear_down_full')">GEAR DOWN FULL</button>
     <button class="test-btn" onclick="testAction('wheel_short')">WHEEL +1</button>
     <button class="test-btn" onclick="testAction('wheel_burst')">WHEEL +5</button>
     <button class="test-btn" id="btnSet40" onclick="testAction('set_40')">SET 40 KM/H</button>
-    <button class="test-btn" id="btnEnableAp" onclick="testAction('enable_ap')" disabled>ENABLE AP</button>
   </div>
-  <div class="log-info" id="testInfo">Gear buttons send 0x229 press/release test frames when TX is enabled.</div>
+  <div class="log-info" id="testInfo">Wheel and set-speed buttons send test frames only when TX is enabled.</div>
 </div>
 
 <!-- Battery -->
@@ -467,8 +428,16 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
     <label class="sw"><input type="checkbox" id="swIgnoreOta" onchange="cmd('ignore_ota',this.checked)"><span class="sl2"></span></label>
   </div>
   <div class="row">
+    <span class="lbl">FSD Unlock</span>
+    <label class="sw"><input type="checkbox" id="swFsdUnlock" onchange="cmd('fsd_unlock',this.checked)"><span class="sl2"></span></label>
+  </div>
+  <div class="row">
     <span class="lbl">NAG Killer</span>
     <label class="sw"><input type="checkbox" id="swNag" onchange="cmd('nag',this.checked)"><span class="sl2"></span></label>
+  </div>
+  <div class="row">
+    <span class="lbl">Continuous AP</span>
+    <label class="sw"><input type="checkbox" id="swContinuousAp" onchange="cmd('continuous_ap',this.checked)"><span class="sl2"></span></label>
   </div>
   <div class="row">
     <span class="lbl">BMS Display</span>
@@ -710,7 +679,9 @@ function updateControlsSummary(d){
   var items=[];
   if(d.op_mode===1)items.push('Active');
   if(d.ignore_ota)items.push('Ignore OTA');
+  if(d.fsd_unlock)items.push('FSD Unlock');
   if(d.nag_killer)items.push('NAG Killer');
+  if(d.continuous_ap)items.push('Continuous AP');
   if(d.bms_output)items.push('BMS');
   if(d.force_fsd)items.push('Force FSD');
   if(d.china_mode)items.push('China');
@@ -747,21 +718,7 @@ function upd(d){
   if(bF) bF.textContent='HV:'+(d.bms_hv_seen||0)+' SOC:'+(d.bms_soc_seen||0)+' TH:'+(d.bms_thermal_seen||0);
 
   if(d.test){
-    dot('tdl',!!d.test.turn_down_light);
-    dot('tdh',!!d.test.turn_down_hard);
-    dot('tul',!!d.test.turn_up_light);
-    dot('tuh',!!d.test.turn_up_hard);
-    dot('sfu',!!d.test.stalk_full_up);
-    dot('sfd',!!d.test.stalk_full_down);
-    dot('slu',!!d.test.stalk_light_up);
-    dot('sld',!!d.test.stalk_light_down);
-    dot('whu',!!d.test.wheel_up);
-    dot('whd',!!d.test.wheel_down);
-    dot('wbu',!!d.test.wheel_up_burst);
-    dot('wbd',!!d.test.wheel_down_burst);
     pill('apReady',!!d.test.ap_ready,d.test.ap_ready?'Ready':'Not Ready');
-    pill('leftTurnActive',!!d.test.left_turn_active,d.test.left_turn_active?'Active':(d.test.left_turn_status_seen?'Idle':'--'));
-    pill('rightTurnActive',!!d.test.right_turn_active,d.test.right_turn_active?'Active':(d.test.right_turn_status_seen?'Idle':'--'));
     var dl=document.getElementById('detLimit');
     if(dl)dl.innerHTML=speedText(d.test.speed_limit_kph||0,!!d.test.speed_limit_seen,d.test.speed_limit_source||'');
     var cs=document.getElementById('cruiseSet');
@@ -770,12 +727,6 @@ function upd(d){
     if(s40){
       s40.disabled=false;
       s40.title=d.test.cruise_set_speed_seen?'Overrides the next live 0x2B9 frames':'Arms override and waits for live 0x2B9';
-    }
-    var apBtn=document.getElementById('btnEnableAp');
-    if(apBtn){
-      var canAp=d.op_mode===1 && !!d.test.ap_ready;
-      apBtn.disabled=!canAp;
-      apBtn.title=canAp?'Send 0x340 full-down twice':'Requires Active mode and AP Ready';
     }
   }
 
@@ -800,7 +751,9 @@ function upd(d){
 
   // Switches sync
   if(document.getElementById('swIgnoreOta')) document.getElementById('swIgnoreOta').checked=d.ignore_ota;
+  if(document.getElementById('swFsdUnlock')) document.getElementById('swFsdUnlock').checked=d.fsd_unlock;
   if(document.getElementById('swNag')) document.getElementById('swNag').checked=d.nag_killer;
+  if(document.getElementById('swContinuousAp')) document.getElementById('swContinuousAp').checked=d.continuous_ap;
   if(document.getElementById('swBms')) document.getElementById('swBms').checked=d.bms_output;
   if(document.getElementById('swFsd')) document.getElementById('swFsd').checked=d.force_fsd;
   if(document.getElementById('swChina')) document.getElementById('swChina').checked=d.china_mode;
@@ -1259,7 +1212,6 @@ static String build_json() {
     if (!state_copy(&state)) return "{}";
 
     uint32_t uptime_s = (millis() - g_start_ms) / 1000;
-    uint32_t now_ms = millis();
     bool can_vehicle_detected = false;
     if (state.rx_count > 0) {
         can_vehicle_detected = (millis() - g_last_can_seen_ms) <= CAN_VEHICLE_ALIVE_MS;
@@ -1313,11 +1265,8 @@ static String build_json() {
         case SpeedLimitSource_None:
         default: break;
     }
-    auto recent = [now_ms](uint32_t ts) -> bool {
-        return ts != 0u && (uint32_t)(now_ms - ts) <= 1500u;
-    };
 
-    j.reserve(1500);
+    j.reserve(1700);
     j  = "{";
     j += "\"fsd_enabled\":";   j += state.fsd_enabled                 ? "true" : "false"; j += ',';
     j += "\"ap_active\":";     j += state.ap_active                   ? "true" : "false"; j += ',';
@@ -1327,7 +1276,9 @@ static String build_json() {
     j += "\"ap_das_profile\":\""; j += ap_das_profile;                 j += "\",";
     j += "\"isa_speed_enabled\":"; j += isa_speed_enabled              ? "true" : "false"; j += ',';
     j += "\"ignore_ota\":";    j += state.ignore_ota                   ? "true" : "false"; j += ',';
+    j += "\"fsd_unlock\":";    j += state.fsd_unlock                   ? "true" : "false"; j += ',';
     j += "\"nag_killer\":";    j += state.nag_killer                   ? "true" : "false"; j += ',';
+    j += "\"continuous_ap\":"; j += state.continuous_ap                 ? "true" : "false"; j += ',';
     j += "\"bms_output\":";    j += state.bms_output                   ? "true" : "false"; j += ',';
     j += "\"force_fsd\":";     j += state.force_fsd                    ? "true" : "false"; j += ',';
     j += "\"china_mode\":";    j += state.china_mode                   ? "true" : "false"; j += ',';
@@ -1366,28 +1317,7 @@ static String build_json() {
     j += "\"filtered\":";     j += http_can_stream_frames_filtered();  j += ',';
     j += "\"buffered\":";     j += http_can_stream_buffered_frames();  j += "},";
     j += "\"test\":{";
-    j += "\"turn_down_light\":"; j += recent(state.turn_down_light_ms) ? "true" : "false"; j += ',';
-    j += "\"turn_down_hard\":";  j += recent(state.turn_down_hard_ms)  ? "true" : "false"; j += ',';
-    j += "\"turn_up_light\":";   j += recent(state.turn_up_light_ms)   ? "true" : "false"; j += ',';
-    j += "\"turn_up_hard\":";    j += recent(state.turn_up_hard_ms)    ? "true" : "false"; j += ',';
-    j += "\"stalk_full_up\":";    j += recent(state.stalk_full_up_ms)   ? "true" : "false"; j += ',';
-    j += "\"stalk_full_down\":";  j += recent(state.stalk_full_down_ms) ? "true" : "false"; j += ',';
-    j += "\"stalk_light_up\":";   j += recent(state.stalk_light_up_ms)  ? "true" : "false"; j += ',';
-    j += "\"stalk_light_down\":"; j += recent(state.stalk_light_down_ms)? "true" : "false"; j += ',';
-    j += "\"wheel_up\":";         j += recent(state.wheel_up_ms)         ? "true" : "false"; j += ',';
-    j += "\"wheel_down\":";       j += recent(state.wheel_down_ms)       ? "true" : "false"; j += ',';
-    j += "\"wheel_up_burst\":";   j += recent(state.wheel_up_burst_ms)   ? "true" : "false"; j += ',';
-    j += "\"wheel_down_burst\":"; j += recent(state.wheel_down_burst_ms) ? "true" : "false"; j += ',';
     j += "\"ap_ready\":";        j += state.ap_ready                   ? "true" : "false"; j += ',';
-    j += "\"left_turn_active\":";
-    j += state.left_turn_active ? "true" : "false";
-    j += ',';
-    j += "\"left_turn_status_seen\":"; j += state.left_turn_status_seen ? "true" : "false"; j += ',';
-    j += "\"right_turn_active\":";
-    j += state.right_turn_active ? "true" : "false";
-    j += ',';
-    j += "\"right_turn_status_seen\":"; j += state.right_turn_status_seen ? "true" : "false"; j += ',';
-    j += "\"turn_status_seen\":"; j += state.turn_status_seen           ? "true" : "false"; j += ',';
     j += "\"speed_limit_seen\":"; j += state.speed_limit_seen          ? "true" : "false"; j += ',';
     j += "\"speed_limit_kph\":";  j += String(state.speed_limit_kph, 1); j += ',';
     j += "\"speed_limit_source\":\""; j += speed_limit_source;          j += "\",";
@@ -1450,6 +1380,18 @@ static void ws_event(uint8_t num, WStype_t type,
             Serial.printf("[Web] Ignore OTA: %s\n", enabled ? "ON" : "OFF");
             prefs_save(&saved);
         }
+    } else if (strstr(buf, "\"fsd_unlock\"")) {
+        if (vptr) {
+            while (*vptr == ' ' || *vptr == ':') vptr++;
+            bool enabled = (strncmp(vptr, "true", 4) == 0);
+            FSDState saved;
+            state_enter();
+            g_state->fsd_unlock = enabled;
+            saved = *g_state;
+            state_exit();
+            Serial.printf("[Web] FSD Unlock: %s\n", enabled ? "ON" : "OFF");
+            prefs_save(&saved);
+        }
     } else if (strstr(buf, "\"nag\"")) {
         if (vptr) {
             while (*vptr == ' ' || *vptr == ':') vptr++;
@@ -1460,6 +1402,18 @@ static void ws_event(uint8_t num, WStype_t type,
             saved = *g_state;
             state_exit();
             Serial.printf("[Web] NAG Killer: %s\n", enabled ? "ON" : "OFF");
+            prefs_save(&saved);
+        }
+    } else if (strstr(buf, "\"continuous_ap\"")) {
+        if (vptr) {
+            while (*vptr == ' ' || *vptr == ':') vptr++;
+            bool enabled = (strncmp(vptr, "true", 4) == 0);
+            FSDState saved;
+            state_enter();
+            g_state->continuous_ap = enabled;
+            saved = *g_state;
+            state_exit();
+            Serial.printf("[Web] Continuous AP: %s\n", enabled ? "ON" : "OFF");
             prefs_save(&saved);
         }
     }
@@ -1599,26 +1553,12 @@ static void ws_event(uint8_t num, WStype_t type,
         }
     } else if (strstr(buf, "\"test_action\"")) {
         TestActionRequest action = TestAction_None;
-        if (strstr(buf, "\"shift_full\"")) {
-            action = TestAction_ShiftFullPress;
-        } else if (strstr(buf, "\"shift_double\"")) {
-            action = TestAction_ShiftFullDoublePress;
-        } else if (strstr(buf, "\"wheel_short\"")) {
+        if (strstr(buf, "\"wheel_short\"")) {
             action = TestAction_RightWheelShort;
         } else if (strstr(buf, "\"wheel_burst\"")) {
             action = TestAction_RightWheelBurst;
-        } else if (strstr(buf, "\"gear_up_half\"")) {
-            action = TestAction_GearUpHalf;
-        } else if (strstr(buf, "\"gear_up_full\"")) {
-            action = TestAction_GearUpFull;
-        } else if (strstr(buf, "\"gear_down_half\"")) {
-            action = TestAction_GearDownHalf;
-        } else if (strstr(buf, "\"gear_down_full\"")) {
-            action = TestAction_GearDownFull;
         } else if (strstr(buf, "\"set_40\"")) {
             action = TestAction_SetCruise40;
-        } else if (strstr(buf, "\"enable_ap\"")) {
-            action = TestAction_EnableAp;
         }
         if (action != TestAction_None) {
             state_enter();

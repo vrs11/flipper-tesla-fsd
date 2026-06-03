@@ -95,6 +95,13 @@
 #define SIG_EPAS_TORQUE_HIGH_VALUE_MASK  0x0Fu
 #define SIG_EPAS_TORQUE_HIGH_SHIFT          8
 #define SIG_EPAS_TORQUE_LOW_MASK         0xFFu
+#define SIG_EPAS_TORQUE_SCALE_NM         0.01f
+#define SIG_EPAS_TORQUE_OFFSET_NM       -20.5f
+
+// ESP_status (0x145)
+#define SIG_ESP_DRIVER_BRAKE_BYTE           3
+#define SIG_ESP_DRIVER_BRAKE_SHIFT          5
+#define SIG_ESP_DRIVER_BRAKE_MASK        0x03u
 
 // BMS frames
 #define SIG_BMS_VOLTAGE_L_BYTE              0
@@ -146,21 +153,7 @@
 #define SIG_DAS_HANDS_ON_NOT_REQUIRED       0u
 #define SIG_DAS_HANDS_ON_SUSPENDED          8u
 
-// ── Temporary action-test dashboard signals ─────────────────────────────────
-// SCCMLeftStalk (0x249), little-endian:
-//   turnIndicatorStalkStatus: bit16|4
-#define SIG_SCCM_LSTALK_TURN_BYTE           2
-#define SIG_SCCM_LSTALK_TURN_MASK        0x0Fu
-#define SIG_SCCM_TURN_IDLE                  0u
-#define SIG_SCCM_TURN_UP_0_5                1u
-#define SIG_SCCM_TURN_UP_1                  2u
-#define SIG_SCCM_TURN_UP_1_5                3u
-#define SIG_SCCM_TURN_UP_2                  4u
-#define SIG_SCCM_TURN_DOWN_0_5              5u
-#define SIG_SCCM_TURN_DOWN_1                6u
-#define SIG_SCCM_TURN_DOWN_1_5              7u
-#define SIG_SCCM_TURN_DOWN_2                8u
-
+// ── Continuous AP / driver-assist signals ───────────────────────────────────
 // GearLever / right stalk (0x229), little-endian:
 //   GearLeverPosition229: bit12|3
 #define SIG_GEAR_LEVER_POS_BYTE             1

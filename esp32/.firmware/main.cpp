@@ -184,22 +184,39 @@ static bool send_modified_frame(CanBusId bus, const CanFrame &frame) {
     return send_on_bus(bus, frame);
 }
 
-static CanFrame g_last_das_control_frame = {};
-static CanBusId g_last_das_control_bus = CAN_BUS_PRIMARY;
-static bool g_last_das_control_valid = false;
-static CanBusId g_last_vcleft_switch_bus = CAN_BUS_PRIMARY;
+static CanFrame g_last_vcleft_switch_frame = {};
 static bool g_last_vcleft_switch_valid = false;
-static CanBusId g_last_stalk_action_bus = CAN_BUS_PRIMARY;
-static bool g_last_stalk_action_valid = false;
+static uint32_t g_last_vcleft_switch_ms = 0;
 static uint8_t g_last_gear_counter = 0;
 static bool g_last_gear_counter_valid = false;
-static uint8_t g_gear_override_pos = SIG_GEAR_LEVER_CENTER;
-static uint32_t g_gear_override_until_ms = 0;
+static uint32_t g_last_gear_counter_ms = 0;
 static uint32_t g_set_speed_40_until_ms = 0;
+
+enum ContinuousApFlowState : uint8_t {
+    ContAp_Idle = 0,
+    ContAp_WaitSignalOff,
+    ContAp_WaitApReady,
+    ContAp_Attempting,
+};
+
+static ContinuousApFlowState g_cont_ap_state = ContAp_Idle;
+static uint32_t g_cont_ap_signal_off_ms = 0;
+static uint32_t g_cont_ap_attempt_ms = 0;
+static uint32_t g_cont_ap_torque_high_ms = 0;
+static uint32_t g_cont_ap_last_brake_ms = 0;
+static uint32_t g_cont_ap_last_stalk_full_up_ms = 0;
+static uint8_t g_cont_ap_attempts = 0;
+static bool g_cont_ap_last_ap_active = false;
+
+static constexpr uint8_t GEAR_SEQUENCE_MAX = 4;
+static uint8_t g_gear_sequence[GEAR_SEQUENCE_MAX] = {};
+static uint8_t g_gear_sequence_len = 0;
+static uint8_t g_gear_sequence_index = 0;
+static uint32_t g_gear_sequence_progress_ms = 0;
+static uint32_t g_gear_sequence_next_ms = 0;
 
 struct TestScrollBurst {
     bool active;
-    CanBusId bus;
     int8_t ticks;
     uint8_t remaining_steps;
     uint32_t next_ms;
@@ -207,25 +224,126 @@ struct TestScrollBurst {
 
 static TestScrollBurst g_test_scroll = {};
 
-struct TestStalkSequence {
-    bool active;
-    CanBusId bus;
-    uint8_t remaining_steps;
-    uint32_t next_ms;
-};
-
-static TestStalkSequence g_test_stalk = {};
-
 static CanBusId preferred_generated_bus(uint32_t frame_id) {
     if (frame_id == CAN_ID_VCLEFT_SWITCH)
         return configured_bus_from_index(WHEEL_ACTION_TX_BUS_INDEX);
     if (frame_id == CAN_ID_SCCM_RSTALK)
         return configured_bus_from_index(GEAR_LEVER_TX_BUS_INDEX);
-    if (frame_id == CAN_ID_STALK_ACTION)
-        return configured_bus_from_index(STALK_ACTION_TX_BUS_INDEX);
     if (frame_id == CAN_ID_DAS_CONTROL)
         return configured_bus_from_index(DAS_CONTROL_ACTION_TX_BUS_INDEX);
     return CAN_BUS_PRIMARY;
+}
+
+static bool gear_sequence_active() {
+    return g_gear_sequence_index < g_gear_sequence_len;
+}
+
+static void clear_gear_sequence() {
+    g_gear_sequence_len = 0;
+    g_gear_sequence_index = 0;
+    g_gear_sequence_progress_ms = 0;
+    g_gear_sequence_next_ms = 0;
+}
+
+static bool cached_gear_counter_is_fresh(uint32_t now) {
+    return g_last_gear_counter_valid &&
+           g_last_gear_counter_ms != 0u &&
+           (uint32_t)(now - g_last_gear_counter_ms) <= GEAR_LEVER_CACHED_COUNTER_MAX_AGE_MS;
+}
+
+static bool send_gear_position_from_cached_counter(uint8_t gear_pos, const char *name) {
+    uint32_t now = millis();
+    if (!cached_gear_counter_is_fresh(now)) return false;
+
+    FSDState s = state_snapshot();
+    if (!fsd_can_transmit(&s)) return false;
+
+    CanFrame f;
+    uint8_t next_counter =
+        (uint8_t)((g_last_gear_counter + 1u) & SIG_GEAR_LEVER_COUNTER_MASK);
+    if (!fsd_build_gear_lever_frame(&f, gear_pos, next_counter)) return false;
+
+    bool sent = send_generated_frame(preferred_generated_bus(CAN_ID_SCCM_RSTALK), f);
+    if (sent) {
+        uint32_t age_ms = now - g_last_gear_counter_ms;
+        g_last_gear_counter = next_counter;
+        g_last_gear_counter_ms = now;
+        Serial.printf("[%s] 0x229 pos=%u immediate TX on %s (cached age=%lu ms)\n",
+                      name,
+                      (unsigned)gear_pos,
+                      can_bus_name(preferred_generated_bus(CAN_ID_SCCM_RSTALK)),
+                      (unsigned long)age_ms);
+    }
+    return sent;
+}
+
+static bool send_next_gear_sequence_from_cached_counter(const char *name) {
+    if (!gear_sequence_active()) return false;
+    uint8_t gear_pos = g_gear_sequence[g_gear_sequence_index];
+    if (!send_gear_position_from_cached_counter(gear_pos, name)) return false;
+    g_gear_sequence_index++;
+    g_gear_sequence_progress_ms = millis();
+    if (!gear_sequence_active()) clear_gear_sequence();
+    else g_gear_sequence_next_ms = millis() + GEAR_SEQUENCE_STEP_MS;
+    return true;
+}
+
+static bool gear_sequence_timed_out(uint32_t now) {
+    return gear_sequence_active() &&
+           g_gear_sequence_progress_ms != 0u &&
+           (uint32_t)(now - g_gear_sequence_progress_ms) > GEAR_SEQUENCE_TIMEOUT_MS;
+}
+
+static bool gear_sequence_tick(uint32_t now, const char *name) {
+    if (!gear_sequence_active()) return false;
+    if (g_gear_sequence_next_ms != 0u &&
+        (int32_t)(now - g_gear_sequence_next_ms) < 0) {
+        return false;
+    }
+    return send_next_gear_sequence_from_cached_counter(name);
+}
+
+static bool arm_gear_ap_double_press_sequence(uint32_t now) {
+    g_gear_sequence[0] = SIG_GEAR_LEVER_FULL_DOWN;
+    g_gear_sequence[1] = SIG_GEAR_LEVER_CENTER;
+    g_gear_sequence[2] = SIG_GEAR_LEVER_FULL_DOWN;
+    g_gear_sequence[3] = SIG_GEAR_LEVER_CENTER;
+    g_gear_sequence_len = 4;
+    g_gear_sequence_index = 0;
+    g_gear_sequence_progress_ms = now;
+    g_gear_sequence_next_ms = now;
+    return gear_sequence_tick(now, "CONT-AP");
+}
+
+static bool cached_vcleft_switch_is_fresh(uint32_t now) {
+    return g_last_vcleft_switch_valid &&
+           g_last_vcleft_switch_ms != 0u &&
+           g_last_vcleft_switch_frame.dlc > SIG_VCLEFT_RIGHT_SCROLL_BYTE &&
+           (uint32_t)(now - g_last_vcleft_switch_ms) <= VCLEFT_SWITCH_CACHED_FRAME_MAX_AGE_MS;
+}
+
+static bool send_right_scroll_from_cached_frame(int8_t ticks, const char *name) {
+    uint32_t now = millis();
+    if (!cached_vcleft_switch_is_fresh(now)) return false;
+
+    FSDState s = state_snapshot();
+    if (!fsd_can_transmit(&s)) return false;
+
+    CanFrame f = g_last_vcleft_switch_frame;
+    f.data[SIG_VCLEFT_RIGHT_SCROLL_BYTE] =
+        (f.data[SIG_VCLEFT_RIGHT_SCROLL_BYTE] & (uint8_t)(~SIG_VCLEFT_RIGHT_SCROLL_MASK)) |
+        ((uint8_t)ticks & SIG_VCLEFT_RIGHT_SCROLL_MASK);
+
+    CanBusId bus = preferred_generated_bus(CAN_ID_VCLEFT_SWITCH);
+    bool sent = send_generated_frame(bus, f);
+    if (sent) {
+        Serial.printf("[%s] 0x3C2 right-scroll ticks=%d TX on %s (cached age=%lu ms)\n",
+                      name,
+                      (int)ticks,
+                      can_bus_name(bus),
+                      (unsigned long)(now - g_last_vcleft_switch_ms));
+    }
+    return sent;
 }
 
 #if defined(CAN_DRIVER_T2CAN_DUAL)
@@ -456,86 +574,30 @@ static void apply_detected_hw(TeslaHWVersion hw, const char *reason) {
     can_dump_log("HW  auto-detected: %s (%s)", hw_str, reason);
 }
 
-static bool tx_generated_if_allowed(CanBusId bus, const CanFrame &frame, const char *name) {
-    FSDState s = state_snapshot();
-    if (!fsd_can_transmit(&s)) {
-        Serial.printf("[TEST] %s blocked: TX disabled\n", name);
-        return false;
-    }
-    bool sent = send_generated_frame(bus, frame);
-    Serial.printf("[TEST] %s -> %s %s\n",
-                  name,
-                  can_bus_name(bus),
-                  sent ? "sent" : "failed");
-    return sent;
-}
-
 static void run_test_action(TestActionRequest action, uint32_t seq) {
     (void)seq;
 
     switch (action) {
-        case TestAction_GearUpHalf:
-        case TestAction_GearUpFull:
-        case TestAction_GearDownHalf:
-        case TestAction_GearDownFull: {
-            uint8_t gear_pos =
-                action == TestAction_GearUpHalf   ? SIG_GEAR_LEVER_HALF_UP :
-                action == TestAction_GearUpFull   ? SIG_GEAR_LEVER_FULL_UP :
-                action == TestAction_GearDownHalf ? SIG_GEAR_LEVER_HALF_DOWN :
-                                                     SIG_GEAR_LEVER_FULL_DOWN;
-            g_gear_override_pos = gear_pos;
-            g_gear_override_until_ms = millis() + GEAR_LEVER_OVERRIDE_MS;
-            Serial.printf("[TEST] gear lever pos=%u override armed on %s for %u ms%s\n",
-                          gear_pos,
-                          can_bus_name(preferred_generated_bus(CAN_ID_SCCM_RSTALK)),
-                          (unsigned)GEAR_LEVER_OVERRIDE_MS,
-                          g_last_gear_counter_valid ? "" : " (waiting for live counter)");
-            break;
-        }
         case TestAction_RightWheelShort:
             g_test_scroll.active = true;
-            g_test_scroll.bus = preferred_generated_bus(CAN_ID_VCLEFT_SWITCH);
-            g_test_scroll.ticks = -1;
+            g_test_scroll.ticks = 1;
             g_test_scroll.remaining_steps = 2; // tick, then neutral release
             g_test_scroll.next_ms = 0;
             Serial.printf("[TEST] right wheel short armed on %s\n",
-                          can_bus_name(g_test_scroll.bus));
+                          can_bus_name(preferred_generated_bus(CAN_ID_VCLEFT_SWITCH)));
             break;
         case TestAction_RightWheelBurst:
             g_test_scroll.active = true;
-            g_test_scroll.bus = preferred_generated_bus(CAN_ID_VCLEFT_SWITCH);
-            g_test_scroll.ticks = -5;
-            g_test_scroll.remaining_steps = 8; // four pulses with neutral releases
+            g_test_scroll.ticks = 5;
+            g_test_scroll.remaining_steps = 2; // +5 tick, then neutral release
             g_test_scroll.next_ms = 0;
             Serial.printf("[TEST] right wheel burst armed on %s\n",
-                          can_bus_name(g_test_scroll.bus));
+                          can_bus_name(preferred_generated_bus(CAN_ID_VCLEFT_SWITCH)));
             break;
-        case TestAction_SetCruise40: {
-            (void)g_last_das_control_frame;
-            (void)g_last_das_control_bus;
-            (void)g_last_das_control_valid;
+        case TestAction_SetCruise40:
             g_set_speed_40_until_ms = millis() + 3000u;
             Serial.printf("[TEST] set cruise speed 40 kph armed for next live 0x2B9 frame, TX on %s\n",
                           can_bus_name(preferred_generated_bus(CAN_ID_DAS_CONTROL)));
-            break;
-        }
-        case TestAction_ShiftFullDoublePress:
-        case TestAction_EnableAp: {
-            FSDState s = state_snapshot();
-            if (!s.ap_ready) {
-                Serial.println("[TEST] AP enable blocked: AP is not ready");
-                break;
-            }
-            g_test_stalk.active = true;
-            g_test_stalk.bus = preferred_generated_bus(CAN_ID_STALK_ACTION);
-            g_test_stalk.remaining_steps = 4; // full-down, release, full-down, release
-            g_test_stalk.next_ms = 0;
-            Serial.printf("[TEST] AP enable double full-down armed on %s\n",
-                          can_bus_name(g_test_stalk.bus));
-            break;
-        }
-        case TestAction_ShiftFullPress:
-            Serial.println("[TEST] single gear full press blocked: AP button uses verified 0x340 double full-down only");
             break;
         case TestAction_None:
         default:
@@ -562,12 +624,12 @@ static void test_scroll_tick(uint32_t now) {
 
     uint8_t step_index = g_test_scroll.remaining_steps;
     bool send_tick = (step_index % 2u) == 0u;
-
-    CanFrame f;
-    fsd_build_right_scroll_frame(&f, send_tick ? g_test_scroll.ticks : 0);
-    tx_generated_if_allowed(g_test_scroll.bus,
-                            f,
-                            send_tick ? "right wheel scroll pulse" : "right wheel neutral release");
+    bool sent = send_right_scroll_from_cached_frame(send_tick ? g_test_scroll.ticks : 0,
+                                                   send_tick ? "TEST wheel pulse" : "TEST wheel neutral");
+    if (!sent) {
+        g_test_scroll.next_ms = now + 10u;
+        return;
+    }
 
     if (g_test_scroll.remaining_steps > 0u) g_test_scroll.remaining_steps--;
     if (g_test_scroll.remaining_steps == 0u) {
@@ -577,24 +639,236 @@ static void test_scroll_tick(uint32_t now) {
     }
 }
 
-static void test_stalk_tick(uint32_t now) {
-    if (!g_test_stalk.active) return;
-    if (g_test_stalk.next_ms != 0u && (int32_t)(now - g_test_stalk.next_ms) < 0) return;
+static const char *continuous_ap_state_name(ContinuousApFlowState state) {
+    switch (state) {
+        case ContAp_WaitSignalOff: return "wait_signal_off";
+        case ContAp_WaitApReady:   return "wait_ap_ready";
+        case ContAp_Attempting:    return "attempting";
+        case ContAp_Idle:
+        default:                   return "idle";
+    }
+}
 
-    uint8_t step_index = g_test_stalk.remaining_steps;
-    bool press = (step_index % 2u) == 0u;
+static void continuous_ap_reset(const char *reason) {
+    if (g_cont_ap_state != ContAp_Idle || g_cont_ap_attempts != 0u) {
+        Serial.printf("[CONT-AP] stop: %s (state=%s attempts=%u)\n",
+                      reason,
+                      continuous_ap_state_name(g_cont_ap_state),
+                      (unsigned)g_cont_ap_attempts);
+    }
+    g_cont_ap_state = ContAp_Idle;
+    g_cont_ap_signal_off_ms = 0u;
+    g_cont_ap_attempt_ms = 0u;
+    g_cont_ap_torque_high_ms = 0u;
+    g_cont_ap_attempts = 0u;
+    clear_gear_sequence();
+}
 
-    CanFrame f;
-    fsd_build_stalk_action_frame(&f, press ? 0x05u : 0x00u);
-    tx_generated_if_allowed(g_test_stalk.bus,
-                            f,
-                            press ? "AP full-down stalk pulse" : "AP stalk release");
+static bool continuous_ap_turn_signal_active(const FSDState &s) {
+    return s.turn_status_seen && (s.left_turn_active || s.right_turn_active);
+}
 
-    if (g_test_stalk.remaining_steps > 0u) g_test_stalk.remaining_steps--;
-    if (g_test_stalk.remaining_steps == 0u) {
-        g_test_stalk.active = false;
-    } else {
-        g_test_stalk.next_ms = now + 140u;
+static bool continuous_ap_turn_signal_off(const FSDState &s) {
+    return s.turn_status_seen && !s.left_turn_active && !s.right_turn_active;
+}
+
+static bool continuous_ap_steering_torque_high(const FSDState &s) {
+    if (!s.torsion_bar_torque_seen) return false;
+    return s.torsion_bar_torque_nm >= CONT_AP_STEERING_TORQUE_ABORT_NM ||
+           s.torsion_bar_torque_nm <= -CONT_AP_STEERING_TORQUE_ABORT_NM;
+}
+
+static bool continuous_ap_torque_allows(uint32_t now, const FSDState &s) {
+    if (!continuous_ap_steering_torque_high(s)) {
+        g_cont_ap_torque_high_ms = 0u;
+        return true;
+    }
+
+    if (g_cont_ap_torque_high_ms == 0u) {
+        g_cont_ap_torque_high_ms = now;
+        if (g_cont_ap_state != ContAp_Idle) {
+            Serial.printf("[CONT-AP] steering torque high %.2f Nm; waiting\n",
+                          s.torsion_bar_torque_nm);
+        }
+    }
+
+    if (g_cont_ap_state != ContAp_Idle &&
+        (uint32_t)(now - g_cont_ap_torque_high_ms) > CONT_AP_STEERING_TORQUE_TIMEOUT_MS) {
+        Serial.printf("[CONT-AP] steering torque high timeout %.2f Nm\n",
+                      s.torsion_bar_torque_nm);
+        continuous_ap_reset("steering torque high");
+    }
+    return false;
+}
+
+static bool continuous_ap_brake_recent(uint32_t now, const FSDState &s) {
+    if (s.driver_brake_applied) return true;
+    return g_cont_ap_last_brake_ms != 0u &&
+           (uint32_t)(now - g_cont_ap_last_brake_ms) <= CONT_AP_BRAKE_RECENT_MS;
+}
+
+static bool continuous_ap_brake_allows(uint32_t now, const FSDState &s) {
+    if (!continuous_ap_brake_recent(now, s)) return true;
+
+    if (g_cont_ap_state != ContAp_Idle) {
+        Serial.println("[CONT-AP] brake pedal kill switch");
+        continuous_ap_reset("brake pedal");
+    }
+    return false;
+}
+
+static bool continuous_ap_stalk_stop_recent(uint32_t now, const FSDState &s) {
+    uint32_t last = s.stalk_full_up_ms;
+    if (g_cont_ap_last_stalk_full_up_ms != 0u &&
+        (last == 0u || (int32_t)(g_cont_ap_last_stalk_full_up_ms - last) > 0)) {
+        last = g_cont_ap_last_stalk_full_up_ms;
+    }
+    return last != 0u && (uint32_t)(now - last) <= CONT_AP_STALK_STOP_RECENT_MS;
+}
+
+static bool continuous_ap_stalk_stop_allows(uint32_t now, const FSDState &s) {
+    if (!continuous_ap_stalk_stop_recent(now, s)) return true;
+
+    if (g_cont_ap_state != ContAp_Idle) {
+        Serial.println("[CONT-AP] right stalk full-up kill switch");
+        continuous_ap_reset("right stalk full-up");
+    }
+    return false;
+}
+
+static void continuous_ap_start_attempt(uint32_t now) {
+    g_cont_ap_attempts++;
+    g_cont_ap_attempt_ms = now;
+    g_cont_ap_state = ContAp_Attempting;
+    bool sent_now = arm_gear_ap_double_press_sequence(now);
+    Serial.printf("[CONT-AP] attempt %u/%u: 0x229 full-down double press armed on %s%s\n",
+                  (unsigned)g_cont_ap_attempts,
+                  (unsigned)CONT_AP_MAX_RETRIES,
+                  can_bus_name(preferred_generated_bus(CAN_ID_SCCM_RSTALK)),
+                  sent_now ? " (first frame sent immediately)" : " (waiting for fresh live counter)");
+}
+
+static void continuous_ap_tick(uint32_t now) {
+    FSDState s = state_snapshot();
+    bool ap_disabled_now = g_cont_ap_last_ap_active && !s.ap_active;
+    g_cont_ap_last_ap_active = s.ap_active;
+
+    if (!s.continuous_ap) {
+        continuous_ap_reset("disabled");
+        return;
+    }
+
+    if (!fsd_can_transmit(&s)) {
+        continuous_ap_reset("TX disabled");
+        return;
+    }
+
+    bool torque_allows = continuous_ap_torque_allows(now, s);
+    bool brake_allows = continuous_ap_brake_allows(now, s);
+    bool stalk_stop_allows = continuous_ap_stalk_stop_allows(now, s);
+
+    if (ap_disabled_now) {
+        Serial.printf("[CONT-AP] AP disabled torque=%s%.2f Nm brake=%u stalk_stop=%u turn_active=%u left=%u right=%u\n",
+                      s.torsion_bar_torque_seen ? "" : "unseen:",
+                      s.torsion_bar_torque_seen ? s.torsion_bar_torque_nm : 0.0f,
+                      continuous_ap_brake_recent(now, s) ? 1u : 0u,
+                      continuous_ap_stalk_stop_recent(now, s) ? 1u : 0u,
+                      continuous_ap_turn_signal_active(s) ? 1u : 0u,
+                      s.left_turn_active ? 1u : 0u,
+                      s.right_turn_active ? 1u : 0u);
+    }
+
+    if (ap_disabled_now && continuous_ap_turn_signal_active(s)) {
+        if (!brake_allows) {
+            Serial.println("[CONT-AP] AP disabled with turn signal active, but brake pedal was pressed");
+            return;
+        }
+        if (!stalk_stop_allows) {
+            Serial.println("[CONT-AP] AP disabled with turn signal active, but right stalk full-up was pressed");
+            return;
+        }
+        if (!torque_allows) {
+            Serial.printf("[CONT-AP] AP disabled with turn signal active, but steering torque is high %.2f Nm\n",
+                          s.torsion_bar_torque_nm);
+            return;
+        }
+        g_cont_ap_state = ContAp_WaitSignalOff;
+        g_cont_ap_signal_off_ms = 0u;
+        g_cont_ap_attempt_ms = 0u;
+        g_cont_ap_attempts = 0u;
+        clear_gear_sequence();
+        Serial.println("[CONT-AP] AP disabled while turn signal active; waiting for turn signal off");
+    }
+
+    switch (g_cont_ap_state) {
+        case ContAp_Idle:
+            return;
+
+        case ContAp_WaitSignalOff:
+            if (s.ap_active) {
+                continuous_ap_reset("AP already active");
+                return;
+            }
+            if (!brake_allows) return;
+            if (!stalk_stop_allows) return;
+            if (!torque_allows) return;
+            if (continuous_ap_turn_signal_off(s)) {
+                g_cont_ap_signal_off_ms = now;
+                g_cont_ap_state = ContAp_WaitApReady;
+                Serial.println("[CONT-AP] turn signal off; waiting for AP ready");
+            }
+            return;
+
+        case ContAp_WaitApReady:
+            if (s.ap_active) {
+                continuous_ap_reset("AP already active");
+                return;
+            }
+            if ((uint32_t)(now - g_cont_ap_signal_off_ms) > CONT_AP_READY_TIMEOUT_MS) {
+                continuous_ap_reset("AP ready timeout");
+                return;
+            }
+            if (!brake_allows) return;
+            if (!stalk_stop_allows) return;
+            if (!torque_allows) return;
+            if (s.ap_ready) {
+                continuous_ap_start_attempt(now);
+            }
+            return;
+
+        case ContAp_Attempting:
+            if (!brake_allows) return;
+            if (!stalk_stop_allows) return;
+            if (!torque_allows) return;
+            gear_sequence_tick(now, "CONT-AP");
+            if (gear_sequence_timed_out(now)) {
+                Serial.println("[CONT-AP] 0x229 sequence timeout");
+                clear_gear_sequence();
+            } else if (gear_sequence_active()) {
+                return;
+            }
+            if (s.ap_active) {
+                continuous_ap_reset("AP active");
+                return;
+            }
+            if ((uint32_t)(now - g_cont_ap_attempt_ms) < CONT_AP_ATTEMPT_RESULT_MS) {
+                return;
+            }
+            if (g_cont_ap_attempts >= CONT_AP_MAX_RETRIES) {
+                continuous_ap_reset("retry limit");
+                return;
+            }
+            if (!s.ap_ready) {
+                if ((uint32_t)(now - g_cont_ap_signal_off_ms) > CONT_AP_READY_TIMEOUT_MS) {
+                    continuous_ap_reset("AP ready timeout");
+                } else {
+                    g_cont_ap_state = ContAp_WaitApReady;
+                    Serial.println("[CONT-AP] AP not ready after attempt; waiting again");
+                }
+                return;
+            }
+            continuous_ap_start_attempt(now);
+            return;
     }
 }
 
@@ -844,41 +1118,35 @@ static void process_frame(CanBusId bus, const CanFrame &frame) {
         return;
     }
 
-    // ── Temporary action-test dashboard parsers (read-only, always) ─────────
-    if (frame.id == CAN_ID_SCCM_LSTALK) {
-        state_enter();
-        fsd_handle_sccm_left_stalk(&g_state, &frame, millis());
-        state_exit();
-        return;
-    }
+    // ── Continuous AP state parsers (read-only, always) ─────────────────────
     if (frame.id == CAN_ID_SCCM_RSTALK) {
         uint32_t now_ms = millis();
+        if (frame.dlc > SIG_GEAR_LEVER_POS_BYTE) {
+            uint8_t gear_pos =
+                (frame.data[SIG_GEAR_LEVER_POS_BYTE] >> SIG_GEAR_LEVER_POS_SHIFT) &
+                SIG_GEAR_LEVER_POS_MASK;
+            if (gear_pos == SIG_GEAR_LEVER_FULL_UP) {
+                g_cont_ap_last_stalk_full_up_ms = now_ms;
+            }
+        }
         state_enter();
         fsd_handle_gear_lever(&g_state, &frame, now_ms);
+        if (g_state.stalk_full_up_ms != 0u &&
+            (g_cont_ap_last_stalk_full_up_ms == 0u ||
+             (int32_t)(g_state.stalk_full_up_ms - g_cont_ap_last_stalk_full_up_ms) > 0)) {
+            g_cont_ap_last_stalk_full_up_ms = g_state.stalk_full_up_ms;
+        }
         state_exit();
         if (frame.dlc > SIG_GEAR_LEVER_COUNTER_BYTE) {
             g_last_gear_counter =
                 frame.data[SIG_GEAR_LEVER_COUNTER_BYTE] & SIG_GEAR_LEVER_COUNTER_MASK;
             g_last_gear_counter_valid = true;
+            g_last_gear_counter_ms = now_ms;
         }
-        if (g_gear_override_until_ms != 0u) {
-            if ((int32_t)(now_ms - g_gear_override_until_ms) < 0) {
-                FSDState s = state_snapshot();
-                if (fsd_can_transmit(&s) && frame.dlc > SIG_GEAR_LEVER_COUNTER_BYTE) {
-                    CanFrame f;
-                    uint8_t next_counter =
-                        (uint8_t)((g_last_gear_counter + 1u) & SIG_GEAR_LEVER_COUNTER_MASK);
-                    if (fsd_build_gear_lever_frame(&f, g_gear_override_pos, next_counter)) {
-                        send_generated_frame(preferred_generated_bus(CAN_ID_SCCM_RSTALK), f);
-                    }
-                }
-            } else {
-                g_gear_override_until_ms = 0u;
-                g_gear_override_pos = SIG_GEAR_LEVER_CENTER;
-            }
+        if (frame.dlc > SIG_GEAR_LEVER_COUNTER_BYTE) {
+            FSDState s = state_snapshot();
+            if (gear_sequence_active() && fsd_can_transmit(&s)) gear_sequence_tick(now_ms, "CONT-AP");
         }
-        g_last_stalk_action_bus = bus;
-        g_last_stalk_action_valid = true;
         return;
     }
     if (frame.id == CAN_ID_UI_MAP_DATA) {
@@ -897,9 +1165,6 @@ static void process_frame(CanBusId bus, const CanFrame &frame) {
         state_enter();
         fsd_handle_das_control(&g_state, &frame);
         state_exit();
-        g_last_das_control_frame = frame;
-        g_last_das_control_bus = bus;
-        g_last_das_control_valid = true;
         if (g_set_speed_40_until_ms != 0u && (int32_t)(millis() - g_set_speed_40_until_ms) < 0) {
             FSDState s = state_snapshot();
             if (fsd_can_transmit(&s)) {
@@ -913,16 +1178,27 @@ static void process_frame(CanBusId bus, const CanFrame &frame) {
         return;
     }
     if (frame.id == CAN_ID_VCLEFT_SWITCH) {
-        state_enter();
-        fsd_handle_vcleft_switch(&g_state, &frame, millis());
-        state_exit();
-        g_last_vcleft_switch_bus = bus;
-        g_last_vcleft_switch_valid = true;
+        uint32_t now_ms = millis();
+        if (frame.dlc > SIG_VCLEFT_RIGHT_SCROLL_BYTE &&
+            (frame.data[SIG_VCLEFT_SWITCH_MUX_BYTE] & SIG_VCLEFT_SWITCH_MUX_MASK) ==
+                SIG_VCLEFT_SWITCH_MUX_WHEEL) {
+            g_last_vcleft_switch_frame = frame;
+            g_last_vcleft_switch_valid = true;
+            g_last_vcleft_switch_ms = now_ms;
+        }
         return;
     }
     if (frame.id == CAN_ID_VCFRONT_LIGHT) {
         state_enter();
         fsd_handle_vcfront_lighting(&g_state, &frame);
+        state_exit();
+        return;
+    }
+    if (frame.id == CAN_ID_ESP_STATUS) {
+        uint32_t now_ms = millis();
+        state_enter();
+        fsd_handle_esp_status(&g_state, &frame);
+        if (g_state.driver_brake_applied) g_cont_ap_last_brake_ms = now_ms;
         state_exit();
         return;
     }
@@ -936,6 +1212,7 @@ static void process_frame(CanBusId bus, const CanFrame &frame) {
     if (frame.id == CAN_ID_EPAS_STATUS) {
         CanFrame echo;
         state_enter();
+        fsd_handle_epas_status(&g_state, &frame);
         bool fired = tx ? fsd_handle_nag_killer(&g_state, &frame, &echo) : false;
         state_exit();
         if (fired) {
@@ -1127,11 +1404,10 @@ void setup() {
                   PIN_MCP_CS, PIN_MCP_SCK, PIN_MCP_MISO, PIN_MCP_MOSI);
     Serial.printf("[CFG] TX route: modified frames -> source bus, generated precondition -> %s\n",
                   can_bus_name(configured_bus_from_index(PRECONDITION_TX_BUS_INDEX)));
-    Serial.printf("[CFG] Test TX route: wheel 0x3C2 -> %s, gear 0x229 -> %s, stalk 0x340 -> %s, set-speed 0x2B9 -> %s\n",
+    Serial.printf("[CFG] Action TX route: wheel 0x3C2 -> %s, set-speed 0x2B9 -> %s, Continuous AP gear 0x229 -> %s\n",
                   can_bus_name(preferred_generated_bus(CAN_ID_VCLEFT_SWITCH)),
-                  can_bus_name(preferred_generated_bus(CAN_ID_SCCM_RSTALK)),
-                  can_bus_name(preferred_generated_bus(CAN_ID_STALK_ACTION)),
-                  can_bus_name(preferred_generated_bus(CAN_ID_DAS_CONTROL)));
+                  can_bus_name(preferred_generated_bus(CAN_ID_DAS_CONTROL)),
+                  can_bus_name(preferred_generated_bus(CAN_ID_SCCM_RSTALK)));
 #elif defined(CAN_DRIVER_TWAI)
     Serial.printf("[CFG] pins: LED=%d BUTTON=%d CAN_TX=%d CAN_RX=%d\n",
                   PIN_LED, PIN_BUTTON, PIN_CAN_TX, PIN_CAN_RX);
@@ -1155,6 +1431,7 @@ void setup() {
     g_state.nag_killer            = true;
     g_state.suppress_speed_chime  = true;
     g_state.ignore_ota            = false;
+    g_state.fsd_unlock            = false;
     g_state.emergency_vehicle_detect = false;
     g_state.force_fsd             = false;
     g_state.china_mode            = false;
@@ -1271,7 +1548,7 @@ void loop() {
 
     test_action_tick();
     test_scroll_tick(now);
-    test_stalk_tick(now);
+    continuous_ap_tick(now);
 
     // ── Precondition frame injection ──────────────────────────────────────────
     static uint32_t last_precond_ms = 0;
@@ -1310,12 +1587,14 @@ void loop() {
             (s.hw_version == TeslaHW_HW3)    ? "HW3"    :
             (s.hw_version == TeslaHW_Legacy)  ? "Legacy" : "?";
         Serial.printf(
-            "[STA] HW:%-6s AP:%-4s FSD_UI:%-4s NAG:%-10s OTA:%-3s "
+            "[STA] HW:%-6s AP:%-4s FSD_UI:%-4s Unlock:%-3s NAG:%-3s Echo:%lu OTA:%-3s "
             "Profile:%d  RX:%lu TX:%lu Mod:%lu Err:%lu\n",
             hw_str,
             s.ap_active       ? "ON"         : "wait",
             s.fsd_enabled     ? "ON"         : "wait",
-            s.nag_suppressed  ? "suppressed"  : "active",
+            s.fsd_unlock      ? "ON"         : "off",
+            s.nag_killer      ? "ON"         : "off",
+            (unsigned long)s.nag_echo_count,
             s.tesla_ota_in_progress ? "YES"  : "no",
             s.speed_profile,
             (unsigned long)s.rx_count,

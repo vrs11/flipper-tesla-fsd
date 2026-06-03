@@ -3,16 +3,15 @@
 // ── CAN IDs ───────────────────────────────────────────────────────────────────
 #define CAN_ID_STW_ACTN_RQ    0x045u  // 69   - STW_ACTN_RQ:  steering stalk (Legacy follow distance)
 #define CAN_ID_TRIP_PLANNING  0x082u  // 130  - UI_tripPlanning: precondition trigger
+#define CAN_ID_ESP_STATUS     0x145u  // 325  - ESP_status: driver brake pedal state
 #define CAN_ID_BMS_HV_BUS     0x132u  // 306  - BMS_hvBusStatus: pack voltage / current
 #define CAN_ID_BMS_SOC        0x292u  // 658  - BMS_socStatus:   state of charge
 #define CAN_ID_BMS_THERMAL    0x312u  // 786  - BMS_thermalStatus: battery temp
 #define CAN_ID_GTW_CAR_STATE  0x318u  // 792  - GTW_carState:    OTA detection
 #define CAN_ID_UI_MAP_DATA    0x238u  // 568  - UI_driverAssistMapData: map speed limit
 #define CAN_ID_SCCM_RSTALK    0x229u  // 553  - GearLever / right stalk
-#define CAN_ID_SCCM_LSTALK    0x249u  // 585  - SCCM left stalk turn indicators
 #define CAN_ID_DAS_CONTROL    0x2B9u  // 697  - DAS_control: cruise set speed / ACC state
 #define CAN_ID_DAS_STATUS2    0x389u  // 905  - DAS_status2: ACC speed limit
-#define CAN_ID_STALK_ACTION   0x340u  // 832  - raw stalk action markers observed from road tests
 #define CAN_ID_EPAS_STATUS    0x370u  // 880  - EPAS3P_sysStatus: nag killer target
 #define CAN_ID_GTW_CAR_CONFIG 0x398u  // 920  - GTW_carConfig:   HW version detection
 #define CAN_ID_VCLEFT_SWITCH  0x3C2u  // 962  - VCLEFT_switchStatus: steering wheel controls
@@ -101,14 +100,10 @@
 #define PRECONDITION_TX_BUS_INDEX 0
 #endif
 
-// ── Dashboard action TX routing ──────────────────────────────────────────────
+// ── Generated TX routing ─────────────────────────────────────────────────────
 // Bus index: 0=can0, 1=can1. Single-CAN builds only have can0.
-// Observed logs show 0x3C2 right-wheel and 0x2B9 DAS_control on can0.
 #ifndef WHEEL_ACTION_TX_BUS_INDEX
 #define WHEEL_ACTION_TX_BUS_INDEX 0
-#endif
-#ifndef STALK_ACTION_TX_BUS_INDEX
-#define STALK_ACTION_TX_BUS_INDEX 0
 #endif
 #ifndef GEAR_LEVER_TX_BUS_INDEX
 #if defined(BOARD_LILYGO_T2CAN)
@@ -151,9 +146,27 @@
 #define FACTORY_RESET_WINDOW_MS 20000u  // Clean-boot window during which reset is possible
 #define STATUS_PRINT_MS       5000u   // Periodic status line when Active
 #define WIFI_STA_CONNECT_TIMEOUT_MS 10000u  // Try saved infrastructure WiFi before AP fallback
-#ifndef GEAR_LEVER_OVERRIDE_MS
-#define GEAR_LEVER_OVERRIDE_MS 450u   // Hold 0x229 gear override across several live SCCM cycles
+#ifndef GEAR_LEVER_CACHED_COUNTER_MAX_AGE_MS
+#define GEAR_LEVER_CACHED_COUNTER_MAX_AGE_MS 150u  // Immediate 0x229 TX only if latest live counter is fresh
 #endif
+#ifndef GEAR_SEQUENCE_STEP_MS
+#define GEAR_SEQUENCE_STEP_MS 40u  // Gap between generated 0x229 press/release sequence frames
+#endif
+#ifndef GEAR_SEQUENCE_TIMEOUT_MS
+#define GEAR_SEQUENCE_TIMEOUT_MS 700u  // Give up if a generated 0x229 sequence cannot start/finish
+#endif
+#ifndef VCLEFT_SWITCH_CACHED_FRAME_MAX_AGE_MS
+#define VCLEFT_SWITCH_CACHED_FRAME_MAX_AGE_MS 150u  // Immediate 0x3C2 TX only if latest wheel frame is fresh
+#endif
+#define CONT_AP_READY_TIMEOUT_MS         5000u
+#define CONT_AP_ATTEMPT_RESULT_MS        1200u
+#ifndef CONT_AP_STEERING_TORQUE_ABORT_NM
+#define CONT_AP_STEERING_TORQUE_ABORT_NM 2.5f
+#endif
+#define CONT_AP_STEERING_TORQUE_TIMEOUT_MS 5000u
+#define CONT_AP_BRAKE_RECENT_MS          750u
+#define CONT_AP_STALK_STOP_RECENT_MS     750u
+#define CONT_AP_MAX_RETRIES                 3u
 
 // OTA detection hardening on GTW_carState (0x318)
 // Some firmware versions keep non-zero states when no update is actively running.
