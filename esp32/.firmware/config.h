@@ -159,7 +159,9 @@
 #define VCLEFT_SWITCH_CACHED_FRAME_MAX_AGE_MS 150u  // Immediate 0x3C2 TX only if latest wheel frame is fresh
 #endif
 #define CONT_AP_READY_TIMEOUT_MS         5000u
-#define CONT_AP_ATTEMPT_RESULT_MS        1200u
+#define CONT_AP_REENGAGE_DELAY_MS        1500u
+#define CONT_AP_ATTEMPT_RESULT_MS        2000u
+#define CONT_AP_RETRY_DELAY_MS           1000u
 #ifndef CONT_AP_STEERING_TORQUE_ABORT_NM
 #define CONT_AP_STEERING_TORQUE_ABORT_NM 2.5f
 #endif

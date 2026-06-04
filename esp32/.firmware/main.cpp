@@ -850,7 +850,8 @@ static void continuous_ap_tick_hw3_legacy(uint32_t now,
             if (continuous_ap_turn_signal_off(s)) {
                 g_cont_ap_signal_off_ms = now;
                 g_cont_ap_state = ContAp_WaitApReady;
-                Serial.println("[CONT-AP] turn signal off; waiting for AP ready");
+                Serial.printf("[CONT-AP] turn signal off; waiting %lu ms before AP reengage\n",
+                              (unsigned long)CONT_AP_REENGAGE_DELAY_MS);
             }
             return;
 
@@ -866,6 +867,9 @@ static void continuous_ap_tick_hw3_legacy(uint32_t now,
             if (!brake_allows) return;
             if (!stalk_stop_allows) return;
             if (!torque_allows) return;
+            if ((uint32_t)(now - g_cont_ap_signal_off_ms) < CONT_AP_REENGAGE_DELAY_MS) {
+                return;
+            }
             if (s.ap_ready) {
                 continuous_ap_hw3_legacy_start_attempt(now);
             }
@@ -891,11 +895,15 @@ static void continuous_ap_tick_hw3_legacy(uint32_t now,
                 continuous_ap_reset("AP active");
                 return;
             }
-            if ((uint32_t)(now - g_cont_ap_attempt_ms) < CONT_AP_ATTEMPT_RESULT_MS) {
+            uint32_t attempt_elapsed = now - g_cont_ap_attempt_ms;
+            if (attempt_elapsed < CONT_AP_ATTEMPT_RESULT_MS) {
                 return;
             }
             if (g_cont_ap_attempts >= CONT_AP_MAX_RETRIES) {
                 continuous_ap_reset("retry limit");
+                return;
+            }
+            if (attempt_elapsed < (CONT_AP_ATTEMPT_RESULT_MS + CONT_AP_RETRY_DELAY_MS)) {
                 return;
             }
             if (!s.ap_ready) {
