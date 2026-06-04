@@ -419,7 +419,7 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
 <!-- Controls -->
 <div class="card controls-section">
   <div class="card-head"><div class="icon ic-c">C</div><h2>Controls</h2></div>
-  <button id="btnMode" class="btn-main btn-act" onclick="toggleMode()">ACTIVATE FSD</button>
+  <button id="btnMode" class="btn-main btn-act" onclick="toggleMode()">Activate</button>
 <details class="controls-fold">
   <summary><span id="controlsSummary" class="control-summary">...</span></summary>
   <div class="controls-body">
@@ -745,7 +745,7 @@ function upd(d){
   var act=d.op_mode===1;
   var btn=document.getElementById('btnMode');
   if(btn){
-    btn.textContent=act?'STOP FSD  \u2192  Listen-Only':'ACTIVATE FSD  \u2192  Active';
+    btn.textContent=act?'Deactivate':'Activate';
     btn.className='btn-main '+(act?'btn-stop':'btn-act');
   }
 
