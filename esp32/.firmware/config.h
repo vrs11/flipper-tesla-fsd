@@ -153,7 +153,7 @@
 #define GEAR_SEQUENCE_STEP_MS 40u  // Gap between generated 0x229 press/release sequence frames
 #endif
 #ifndef GEAR_SEQUENCE_TIMEOUT_MS
-#define GEAR_SEQUENCE_TIMEOUT_MS 700u  // Give up if a generated 0x229 sequence cannot start/finish
+#define GEAR_SEQUENCE_TIMEOUT_MS 1500u  // Give up if a generated 0x229 sequence cannot start/finish
 #endif
 #ifndef VCLEFT_SWITCH_CACHED_FRAME_MAX_AGE_MS
 #define VCLEFT_SWITCH_CACHED_FRAME_MAX_AGE_MS 150u  // Immediate 0x3C2 TX only if latest wheel frame is fresh

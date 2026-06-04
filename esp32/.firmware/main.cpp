@@ -214,6 +214,19 @@ static uint8_t g_gear_sequence_len = 0;
 static uint8_t g_gear_sequence_index = 0;
 static uint32_t g_gear_sequence_progress_ms = 0;
 static uint32_t g_gear_sequence_next_ms = 0;
+static bool g_gear_sequence_counter_valid = false;
+static uint8_t g_gear_sequence_counter = 0;
+static uint32_t g_gear_sequence_send_fail_count = 0;
+
+enum GearSequenceSendResult : uint8_t {
+    GearSeqSend_Sent = 0,
+    GearSeqSend_Inactive,
+    GearSeqSend_WaitStep,
+    GearSeqSend_WaitCounter,
+    GearSeqSend_TxBlocked,
+    GearSeqSend_BuildFailed,
+    GearSeqSend_TxFailed,
+};
 
 struct TestScrollBurst {
     bool active;
@@ -243,6 +256,9 @@ static void clear_gear_sequence() {
     g_gear_sequence_index = 0;
     g_gear_sequence_progress_ms = 0;
     g_gear_sequence_next_ms = 0;
+    g_gear_sequence_counter_valid = false;
+    g_gear_sequence_counter = 0;
+    g_gear_sequence_send_fail_count = 0;
 }
 
 static bool cached_gear_counter_is_fresh(uint32_t now) {
@@ -251,41 +267,71 @@ static bool cached_gear_counter_is_fresh(uint32_t now) {
            (uint32_t)(now - g_last_gear_counter_ms) <= GEAR_LEVER_CACHED_COUNTER_MAX_AGE_MS;
 }
 
-static bool send_gear_position_from_cached_counter(uint8_t gear_pos, const char *name) {
-    uint32_t now = millis();
-    if (!cached_gear_counter_is_fresh(now)) return false;
+static const char *gear_sequence_send_result_name(GearSequenceSendResult result) {
+    switch (result) {
+        case GearSeqSend_Sent:        return "sent";
+        case GearSeqSend_Inactive:    return "inactive";
+        case GearSeqSend_WaitStep:    return "wait_step";
+        case GearSeqSend_WaitCounter: return "wait_counter";
+        case GearSeqSend_TxBlocked:   return "tx_blocked";
+        case GearSeqSend_BuildFailed: return "build_failed";
+        case GearSeqSend_TxFailed:    return "tx_failed";
+        default:                      return "?";
+    }
+}
 
+static GearSequenceSendResult send_gear_position_for_sequence(uint8_t gear_pos,
+                                                              const char *name) {
+    uint32_t now = millis();
     FSDState s = state_snapshot();
-    if (!fsd_can_transmit(&s)) return false;
+    if (!fsd_can_transmit(&s)) return GearSeqSend_TxBlocked;
+
+    if (!g_gear_sequence_counter_valid) {
+        if (!cached_gear_counter_is_fresh(now)) return GearSeqSend_WaitCounter;
+        g_gear_sequence_counter = g_last_gear_counter;
+        g_gear_sequence_counter_valid = true;
+    }
 
     CanFrame f;
     uint8_t next_counter =
-        (uint8_t)((g_last_gear_counter + 1u) & SIG_GEAR_LEVER_COUNTER_MASK);
-    if (!fsd_build_gear_lever_frame(&f, gear_pos, next_counter)) return false;
+        (uint8_t)((g_gear_sequence_counter + 1u) & SIG_GEAR_LEVER_COUNTER_MASK);
+    if (!fsd_build_gear_lever_frame(&f, gear_pos, next_counter)) {
+        return GearSeqSend_BuildFailed;
+    }
 
     bool sent = send_generated_frame(preferred_generated_bus(CAN_ID_SCCM_RSTALK), f);
     if (sent) {
-        uint32_t age_ms = now - g_last_gear_counter_ms;
+        uint32_t age_ms = g_last_gear_counter_ms == 0u ? 0u : now - g_last_gear_counter_ms;
+        g_gear_sequence_counter = next_counter;
         g_last_gear_counter = next_counter;
         g_last_gear_counter_ms = now;
-        Serial.printf("[%s] 0x229 pos=%u immediate TX on %s (cached age=%lu ms)\n",
+        g_last_gear_counter_valid = true;
+        Serial.printf("[%s] 0x229 pos=%u seq=%u/%u TX on %s (counter=%u cached age=%lu ms)\n",
                       name,
                       (unsigned)gear_pos,
+                      (unsigned)(g_gear_sequence_index + 1u),
+                      (unsigned)g_gear_sequence_len,
                       can_bus_name(preferred_generated_bus(CAN_ID_SCCM_RSTALK)),
+                      (unsigned)next_counter,
                       (unsigned long)age_ms);
+        return GearSeqSend_Sent;
     }
-    return sent;
+    return GearSeqSend_TxFailed;
 }
 
-static bool send_next_gear_sequence_from_cached_counter(const char *name) {
-    if (!gear_sequence_active()) return false;
+static GearSequenceSendResult send_next_gear_sequence_frame(const char *name) {
+    if (!gear_sequence_active()) return GearSeqSend_Inactive;
     uint8_t gear_pos = g_gear_sequence[g_gear_sequence_index];
-    if (!send_gear_position_from_cached_counter(gear_pos, name)) return false;
+    GearSequenceSendResult result = send_gear_position_for_sequence(gear_pos, name);
+    if (result != GearSeqSend_Sent) {
+        g_gear_sequence_send_fail_count++;
+        return result;
+    }
     g_gear_sequence_index++;
     g_gear_sequence_progress_ms = millis();
     if (!gear_sequence_active()) clear_gear_sequence();
     else g_gear_sequence_next_ms = millis() + GEAR_SEQUENCE_STEP_MS;
-    return true;
+    return GearSeqSend_Sent;
 }
 
 static bool gear_sequence_timed_out(uint32_t now) {
@@ -294,16 +340,16 @@ static bool gear_sequence_timed_out(uint32_t now) {
            (uint32_t)(now - g_gear_sequence_progress_ms) > GEAR_SEQUENCE_TIMEOUT_MS;
 }
 
-static bool gear_sequence_tick(uint32_t now, const char *name) {
-    if (!gear_sequence_active()) return false;
+static GearSequenceSendResult gear_sequence_tick(uint32_t now, const char *name) {
+    if (!gear_sequence_active()) return GearSeqSend_Inactive;
     if (g_gear_sequence_next_ms != 0u &&
         (int32_t)(now - g_gear_sequence_next_ms) < 0) {
-        return false;
+        return GearSeqSend_WaitStep;
     }
-    return send_next_gear_sequence_from_cached_counter(name);
+    return send_next_gear_sequence_frame(name);
 }
 
-static bool arm_gear_ap_double_press_sequence(uint32_t now) {
+static GearSequenceSendResult arm_gear_ap_double_press_sequence(uint32_t now) {
     g_gear_sequence[0] = SIG_GEAR_LEVER_FULL_DOWN;
     g_gear_sequence[1] = SIG_GEAR_LEVER_CENTER;
     g_gear_sequence[2] = SIG_GEAR_LEVER_FULL_DOWN;
@@ -740,12 +786,12 @@ static void continuous_ap_hw3_legacy_start_attempt(uint32_t now) {
     g_cont_ap_attempts++;
     g_cont_ap_attempt_ms = now;
     g_cont_ap_state = ContAp_Attempting;
-    bool sent_now = arm_gear_ap_double_press_sequence(now);
-    Serial.printf("[CONT-AP] attempt %u/%u: 0x229 full-down double press armed on %s%s\n",
+    GearSequenceSendResult result = arm_gear_ap_double_press_sequence(now);
+    Serial.printf("[CONT-AP] attempt %u/%u: 0x229 full-down double press armed on %s (%s)\n",
                   (unsigned)g_cont_ap_attempts,
                   (unsigned)CONT_AP_MAX_RETRIES,
                   can_bus_name(preferred_generated_bus(CAN_ID_SCCM_RSTALK)),
-                  sent_now ? " (first frame sent immediately)" : " (waiting for fresh live counter)");
+                  result == GearSeqSend_Sent ? "first frame sent" : gear_sequence_send_result_name(result));
 }
 
 static void continuous_ap_tick_hw3_legacy(uint32_t now,
@@ -828,9 +874,13 @@ static void continuous_ap_tick_hw3_legacy(uint32_t now,
             if (!brake_allows) return;
             if (!stalk_stop_allows) return;
             if (!torque_allows) return;
-            gear_sequence_tick(now, "CONT-AP");
+            GearSequenceSendResult result = gear_sequence_tick(now, "CONT-AP");
             if (gear_sequence_timed_out(now)) {
-                Serial.println("[CONT-AP] 0x229 sequence timeout");
+                Serial.printf("[CONT-AP] 0x229 sequence timeout after %u/%u frames (last=%s fails=%lu)\n",
+                              (unsigned)g_gear_sequence_index,
+                              (unsigned)g_gear_sequence_len,
+                              gear_sequence_send_result_name(result),
+                              (unsigned long)g_gear_sequence_send_fail_count);
                 clear_gear_sequence();
             } else if (gear_sequence_active()) {
                 return;
