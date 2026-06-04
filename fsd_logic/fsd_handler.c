@@ -127,12 +127,20 @@ void fsd_handle_follow_distance(FSDState* state, const CANFRAME* frame) {
     }
 }
 
-bool fsd_handle_autopilot_frame(FSDState* state, CANFRAME* frame) {
+bool fsd_ap_first_allows(const FSDState* state, uint32_t now_ms) {
+    if(!state->ap_first) return true;            // gate off -> always allow
+    if(state->das_ap_state < 2) return false;    // AP not engaged yet
+    // AP engaged: require it to have held stable for the debounce window.
+    return (now_ms - state->ap_unstable_tick_ms) >= AP_FIRST_STABLE_MS;
+}
+
+bool fsd_handle_autopilot_frame(FSDState* state, CANFRAME* frame, uint32_t now_ms) {
     if(frame->data_lenght < 8) return false;
 
-    // AP-first mode (2026.14.x): don't modify 0x3FD until AP is engaged.
-    // das_ap_state >= 2 means AP is active (ACTIVE_NOMINAL or higher).
-    if(state->ap_first && state->das_ap_state < 2) return false;
+    // AP-first (2026.14.x): don't modify 0x3FD until AP is engaged AND has been
+    // stable for AP_FIRST_STABLE_MS — injecting on the activation edge is linked
+    // to a steer-jerk (ev-open-can-tools#66 / v3.0.2-beta.2).
+    if(!fsd_ap_first_allows(state, now_ms)) return false;
 
     uint8_t mux = fsd_read_mux_id(frame);
     bool fsd_ui = fsd_is_selected_in_ui(frame, state->force_fsd);
@@ -228,8 +236,16 @@ void fsd_handle_legacy_stalk(FSDState* state, const CANFRAME* frame) {
         state->speed_profile = 0;
 }
 
-bool fsd_handle_legacy_autopilot(FSDState* state, CANFRAME* frame) {
+bool fsd_handle_legacy_autopilot(FSDState* state, CANFRAME* frame, uint32_t now_ms) {
     if(frame->data_lenght < 8) return false;
+
+    // AP-first (timing safety): don't inject FSD-enable on 0x3EE until AP is
+    // engaged and stable. The Legacy path was missing this gate; injecting on
+    // the activation edge is linked to a steer-jerk on some Legacy/HW3 cars
+    // (China FW 2026.8.3.6); see ev-open-can-tools#66. das_ap_state comes from
+    // 0x399 DAS_status (Legacy/HW3).
+    if(!fsd_ap_first_allows(state, now_ms)) return false;
+
     uint8_t mux = fsd_read_mux_id(frame);
     bool fsd_ui = fsd_is_selected_in_ui(frame, state->force_fsd);
     bool modified = false;
@@ -418,6 +434,23 @@ void fsd_handle_das_status_hw4(FSDState* state, const CANFRAME* frame) {
     state->das_fcw = (frame->buffer[2] >> 6) & 0x03;
     // DAS_visionOnlySpeedLimit: bit16|5 → byte2 bits[4:0], ×5 = kph
     state->das_vision_speed_lim = frame->buffer[2] & 0x1F;
+    state->das_seen = true;
+    state->das_hw4_status_seen = true;
+}
+
+// HW4 0x399 hands-on fallback.
+//
+// Some HW4 trims (observed on a Juniper RWD, Bus 6 / X179 pin 13/14, #100)
+// never broadcast 0x39B; on those cars 0x399 carries the hands-on escalation in
+// the SAME byte5 bits[5:2] field as 0x39B (verified against a captured nag run:
+// the field steps 1→2→3 as the visual nag escalates). When 0x39B has not been
+// seen, read just that field from 0x399 so the nag gate isn't starved.
+//
+// Deliberately reads ONLY the hands-on field — not das_ap_state — because the
+// 0x399 byte0 layout on HW4 is not confirmed (0x399 is the ISA chime there).
+void fsd_handle_das_handsonly_399(FSDState* state, const CANFRAME* frame) {
+    if(frame->data_lenght < 6) return;
+    state->das_hands_on_state = (frame->buffer[5] >> 2) & 0x0Fu;
     state->das_seen = true;
 }
 

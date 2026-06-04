@@ -55,11 +55,22 @@ uint8_t fsd_read_mux_id(const CANFRAME* frame);
 bool fsd_is_selected_in_ui(const CANFRAME* frame, bool force_fsd);
 TeslaHWVersion fsd_detect_hw_version(const CANFRAME* frame);
 
+// AP-First stability debounce: AP must hold das_ap_state >= 2 for at least this
+// long before injection is allowed, to avoid injecting on the activation edge
+// (the steer-jerk window). Mirrors ev-open-can-tools v3.0.2-beta.2 (1 s).
+#define AP_FIRST_STABLE_MS 1000u
+
+/** AP-First gate. Returns true if injection is permitted right now: either
+ *  AP-First is off, or AP is engaged (das_ap_state >= 2) and has been stable for
+ *  >= AP_FIRST_STABLE_MS. now_ms is a millisecond clock; ap_unstable_tick_ms is
+ *  stamped by the caller whenever das_ap_state < 2. */
+bool fsd_ap_first_allows(const FSDState* state, uint32_t now_ms);
+
 void fsd_handle_follow_distance(FSDState* state, const CANFRAME* frame);
-bool fsd_handle_autopilot_frame(FSDState* state, CANFRAME* frame);
+bool fsd_handle_autopilot_frame(FSDState* state, CANFRAME* frame, uint32_t now_ms);
 
 void fsd_handle_legacy_stalk(FSDState* state, const CANFRAME* frame);
-bool fsd_handle_legacy_autopilot(FSDState* state, CANFRAME* frame);
+bool fsd_handle_legacy_autopilot(FSDState* state, CANFRAME* frame, uint32_t now_ms);
 bool fsd_handle_isa_speed_chime(CANFRAME* frame);
 
 /** Handle CAN ID 0x370 - EPAS nag killer (counter+1 echo).
@@ -141,6 +152,10 @@ void fsd_handle_das_status_hw4(FSDState* state, const CANFRAME* frame);
 /** Pre-Highland HW3 / Legacy DAS_status parser (0x399, legacy CAN layout).
  *  Same frame ID as HW4 ISA_SPEED — caller dispatches by HW version. */
 void fsd_handle_das_status_hw3(FSDState* state, const CANFRAME* frame);
+/** HW4 hands-on fallback: read only DAS_handsOnState (byte5[5:2]) from 0x399.
+ *  For HW4 trims that never broadcast 0x39B; call only when das_hw4_status_seen
+ *  is false. Read-only, leaves das_ap_state untouched. */
+void fsd_handle_das_handsonly_399(FSDState* state, const CANFRAME* frame);
 
 /** Parse DAS_status2 (0x389) — ACC report, activation failure.
  *  Source: opendbc tesla_model3_party.dbc. */

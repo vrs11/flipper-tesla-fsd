@@ -72,10 +72,12 @@ typedef struct FSDState {
     bool torsion_bar_torque_seen;
     bool driver_brake_applied;   // from 0x145 ESP_driverBrakeApply
     bool speed_seen;             // true once we've parsed at least one 0x257
+    uint32_t last_speed_tick_ms; // ms clock when the last 0x257 was seen (TX interlock freshness)
 
     // --- AP-first mode (2026.14.x compatibility) ---
-    bool ap_first;               // delay 0x3FD injection until AP is engaged
+    bool ap_first;               // delay 0x3FD/0x3EE injection until AP is engaged AND stable
     uint8_t das_ap_state;        // DAS_autopilotState: 0=UNAVAIL 1=AVAIL 2=ACTIVE_NOMINAL 3+=active
+    uint32_t ap_unstable_tick_ms;// ms clock when das_ap_state was last < 2 (AP-first stability debounce)
 
     // --- Scroll-Press AP Engage (0x3C2 VCLEFT_switchStatus, HW4-only, Service mode) ---
     bool scroll_press_ap;            // user toggle
@@ -93,7 +95,10 @@ typedef struct FSDState {
     uint8_t das_acc_report;      // 0-24 (ACC state: 0=off, higher=active modes)
     uint8_t das_activation_fail; // 0-2  (why AP failed to activate)
     bool das_autosteer_on;       // from 0x293 DAS_autosteerEnabled readback
-    bool das_seen;               // true once we've parsed at least one 0x39B
+    bool das_seen;               // true once we've parsed any DAS_status hands-on source
+    bool das_hw4_status_seen;    // true once the HW4 0x39B DAS_status has been parsed
+                                 // (gate for the 0x399 hands-on fallback on HW4 trims
+                                 //  that never broadcast 0x39B, e.g. Juniper RWD on Bus 6)
 
     // --- GTW autopilot tier (from 0x7FF mux=2 on mixed bus) ---
     int8_t gtw_autopilot_tier;   // -1 = not yet read

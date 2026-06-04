@@ -23,6 +23,8 @@ TeslaFSDApp* tesla_fsd_app_alloc(void) {
     app->mutex = furi_mutex_alloc(FuriMutexTypeNormal);
 
     app->gui = furi_record_open(RECORD_GUI);
+    app->storage = furi_record_open(RECORD_STORAGE);
+    app->dialogs = furi_record_open(RECORD_DIALOGS);
 
     app->scene_manager = scene_manager_alloc(&tesla_fsd_scene_handlers, app);
 
@@ -76,6 +78,8 @@ void tesla_fsd_app_free(TeslaFSDApp* app) {
     view_dispatcher_free(app->view_dispatcher);
 
     furi_record_close(RECORD_GUI);
+    furi_record_close(RECORD_STORAGE);
+    furi_record_close(RECORD_DIALOGS);
 
     furi_mutex_free(app->mutex);
 

@@ -1305,10 +1305,10 @@ static String build_json() {
     j += "\"can_dump\":";      j += can_dump_active()                 ? "true" : "false"; j += ',';
     j += "\"sleep_ms\":";     j += state.sleep_idle_ms;               j += ',';
     j += "\"wifi_ssid\":\"";  j += json_escape(state.wifi_ssid);      j += "\",";
-    j += "\"wifi_pass\":\"***\",";
+    j += "\"wifi_pass\":\"";  j += state.wifi_pass[0] ? "***" : "";  j += "\",";
     j += "\"wifi_hidden\":";  j += state.wifi_hidden                  ? "true" : "false"; j += ',';
     j += "\"wifi_sta_ssid\":\""; j += json_escape(state.wifi_sta_ssid); j += "\",";
-    j += "\"wifi_sta_pass\":\"***\",";
+    j += "\"wifi_sta_pass\":\""; j += state.wifi_sta_pass[0] ? "***" : ""; j += "\",";
     j += "\"wifi_clients\":";  j += (int)WiFi.softAPgetStationNum();   j += ',';
     j += "\"http_can_stream\":{";
     j += "\"active\":";       j += http_can_stream_active()           ? "true" : "false"; j += ',';

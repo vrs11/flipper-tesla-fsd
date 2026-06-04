@@ -1,5 +1,6 @@
 #include "../tesla_fsd_app.h"
 #include "../scenes_config/app_scene_functions.h"
+#include "../fsd_logic/fsd_capture.h"  // shared candump-ASCII formatter
 #include <stdio.h>
 
 #define FSD_DISPLAY_REFRESH_MS 250
@@ -98,9 +99,17 @@ static void fsd_update_display(TeslaFSDApp* app, uint32_t uptime_ms) {
             app->widget, 2, 46, AlignLeft, AlignTop, FontSecondary, line4);
     }
 
-    widget_add_string_element(
-        app->widget, 64, 56, AlignCenter, AlignTop, FontSecondary,
-        "[BACK] to stop");
+    if(app->can_capture) {
+        char footer[40];
+        snprintf(footer, sizeof(footer), "REC %lu  [BACK] stop",
+            (unsigned long)app->capture_count);
+        widget_add_string_element(
+            app->widget, 64, 56, AlignCenter, AlignTop, FontSecondary, footer);
+    } else {
+        widget_add_string_element(
+            app->widget, 64, 56, AlignCenter, AlignTop, FontSecondary,
+            "[BACK] to stop");
+    }
 }
 
 static int32_t fsd_running_worker(void* context) {
@@ -128,6 +137,7 @@ static int32_t fsd_running_worker(void* context) {
     // gtw_shield_armed starts false; fsd_handle_gtw_shield() auto-arms
     // after all 8 mux snapshots are captured.
     bool shield_enabled = app->gtw_shield;
+    bool capture_enabled = app->can_capture;
     state.gtw_shield_armed = false;
     state.tlssc_restore = app->tlssc_restore;
     state.ap_first = app->ap_first;
@@ -177,6 +187,24 @@ static int32_t fsd_running_worker(void* context) {
         init_filter(mcp, 5, 0x000);
     }
 
+    // CAN capture: log every RX frame to SD in candump-ASCII for the cracker /
+    // a bug report. Read-only, works in any op_mode (Listen-Only is the point).
+    File* cap_file = NULL;
+    uint32_t cap_count = 0;
+    if(capture_enabled) {
+        storage_common_mkdir(app->storage, "/ext/apps_data/tesla_mod");
+        storage_common_mkdir(app->storage, "/ext/apps_data/tesla_mod/captures");
+        char cap_path[80];
+        snprintf(cap_path, sizeof(cap_path),
+            "/ext/apps_data/tesla_mod/captures/cap_%lu.log",
+            (unsigned long)furi_get_tick());
+        cap_file = storage_file_alloc(app->storage);
+        if(!storage_file_open(cap_file, cap_path, FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
+            storage_file_free(cap_file);
+            cap_file = NULL;
+        }
+    }
+
     uint32_t last_display = 0;
     uint32_t last_err_check = 0;
     uint32_t last_precond = 0;
@@ -188,6 +216,10 @@ static int32_t fsd_running_worker(void* context) {
 
         // Periodic CAN error register sample (~every 250ms)
         uint32_t now = furi_get_tick();
+
+        // AP-first stability debounce: stamp the last moment AP was not engaged,
+        // so fsd_ap_first_allows() can require AP to hold stable before injecting.
+        if(state.das_ap_state < 2) state.ap_unstable_tick_ms = now;
         if((now - last_err_check) >= furi_ms_to_ticks(250)) {
             uint8_t eflg = get_error(mcp);
             // EFLG bits 0/1 = RX0/RX1 overflow, bit 4 = receive error warn,
@@ -240,6 +272,18 @@ static int32_t fsd_running_worker(void* context) {
         if(check_receive(mcp) == ERROR_OK) {
             if(read_can_message(mcp, &frame) == ERROR_OK) {
                 state.rx_count++;
+
+                // Capture (read-only): append the raw frame to the SD log.
+                if(cap_file) {
+                    char cap_line[48];
+                    uint32_t cap_ms =
+                        (now - worker_start) * 1000 / furi_kernel_get_tick_frequency();
+                    int cap_n = tesla_format_candump_line(
+                        cap_line, sizeof(cap_line), cap_ms, "can0",
+                        frame.canId, frame.buffer, frame.data_lenght);
+                    storage_file_write(cap_file, cap_line, cap_n);
+                    cap_count++;
+                }
 
                 bool tx_allowed = fsd_can_transmit(&state);
 
@@ -368,7 +412,7 @@ static int32_t fsd_running_worker(void* context) {
                 } else if(frame.canId == CAN_ID_STW_ACTN_RQ && state.hw_version == TeslaHW_Legacy) {
                     fsd_handle_legacy_stalk(&state, &frame);
                 } else if(frame.canId == CAN_ID_AP_LEGACY && state.hw_version == TeslaHW_Legacy) {
-                    if(fsd_handle_legacy_autopilot(&state, &frame) && tx_allowed) {
+                    if(fsd_handle_legacy_autopilot(&state, &frame, now) && tx_allowed) {
                         send_can_frame(mcp, &frame);
                     }
                 } else if(frame.canId == CAN_ID_ISA_SPEED) {
@@ -376,6 +420,13 @@ static int32_t fsd_running_worker(void* context) {
                     // Suppress Chime is HW4-only because writing the HW4 ISA bits
                     // on HW3 would corrupt the DAS_status payload.
                     if(state.hw_version == TeslaHW_HW4) {
+                        // HW4 trims that never broadcast 0x39B carry the hands-on
+                        // field on 0x399 (same byte5[5:2]); read it as a fallback
+                        // so the nag gate isn't starved. Read-only — the chime
+                        // suppress below still runs.
+                        if(!state.das_hw4_status_seen) {
+                            fsd_handle_das_handsonly_399(&state, &frame);
+                        }
                         if(state.suppress_speed_chime &&
                            fsd_handle_isa_speed_chime(&frame) && tx_allowed) {
                             send_can_frame(mcp, &frame);
@@ -389,7 +440,7 @@ static int32_t fsd_running_worker(void* context) {
                         send_can_frame(mcp, &frame);
                     }
                 } else if(frame.canId == CAN_ID_AP_CONTROL) {
-                    if(fsd_handle_autopilot_frame(&state, &frame) && tx_allowed) {
+                    if(fsd_handle_autopilot_frame(&state, &frame, now) && tx_allowed) {
                         send_can_frame(mcp, &frame);
                     }
                 } else if(frame.canId == CAN_ID_VCLEFT_SWITCH) {
@@ -401,6 +452,7 @@ static int32_t fsd_running_worker(void* context) {
                 if((now - last_display) >= furi_ms_to_ticks(FSD_DISPLAY_REFRESH_MS)) {
                     furi_mutex_acquire(app->mutex, FuriWaitForever);
                     app->fsd_state = state;
+                    app->capture_count = cap_count;
                     furi_mutex_release(app->mutex);
                     uint32_t uptime_ms = (now - worker_start) * 1000 / furi_kernel_get_tick_frequency();
                     fsd_update_display(app, uptime_ms);
@@ -413,6 +465,7 @@ static int32_t fsd_running_worker(void* context) {
             if((now - last_display) >= furi_ms_to_ticks(FSD_DISPLAY_REFRESH_MS)) {
                 furi_mutex_acquire(app->mutex, FuriWaitForever);
                 app->fsd_state = state;
+                app->capture_count = cap_count;
                 furi_mutex_release(app->mutex);
                 uint32_t uptime_ms = (now - worker_start) * 1000 / furi_kernel_get_tick_frequency();
                 fsd_update_display(app, uptime_ms);
@@ -420,6 +473,11 @@ static int32_t fsd_running_worker(void* context) {
             }
             furi_delay_ms(1);
         }
+    }
+
+    if(cap_file) {
+        storage_file_close(cap_file);
+        storage_file_free(cap_file);
     }
 
     deinit_mcp2515(mcp);
