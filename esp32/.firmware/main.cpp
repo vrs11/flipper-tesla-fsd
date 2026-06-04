@@ -328,9 +328,10 @@ static GearSequenceSendResult send_next_gear_sequence_frame(const char *name) {
         return result;
     }
     g_gear_sequence_index++;
-    g_gear_sequence_progress_ms = millis();
+    uint32_t now = millis();
+    g_gear_sequence_progress_ms = now;
     if (!gear_sequence_active()) clear_gear_sequence();
-    else g_gear_sequence_next_ms = millis() + GEAR_SEQUENCE_STEP_MS;
+    else g_gear_sequence_next_ms = now + GEAR_SEQUENCE_STEP_MS;
     return GearSeqSend_Sent;
 }
 
@@ -875,7 +876,8 @@ static void continuous_ap_tick_hw3_legacy(uint32_t now,
             if (!stalk_stop_allows) return;
             if (!torque_allows) return;
             GearSequenceSendResult result = gear_sequence_tick(now, "CONT-AP");
-            if (gear_sequence_timed_out(now)) {
+            uint32_t sequence_now = millis();
+            if (gear_sequence_timed_out(sequence_now)) {
                 Serial.printf("[CONT-AP] 0x229 sequence timeout after %u/%u frames (last=%s fails=%lu)\n",
                               (unsigned)g_gear_sequence_index,
                               (unsigned)g_gear_sequence_len,
