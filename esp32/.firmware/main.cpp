@@ -736,7 +736,7 @@ static bool continuous_ap_stalk_stop_allows(uint32_t now, const FSDState &s) {
     return false;
 }
 
-static void continuous_ap_start_attempt(uint32_t now) {
+static void continuous_ap_hw3_legacy_start_attempt(uint32_t now) {
     g_cont_ap_attempts++;
     g_cont_ap_attempt_ms = now;
     g_cont_ap_state = ContAp_Attempting;
@@ -748,21 +748,9 @@ static void continuous_ap_start_attempt(uint32_t now) {
                   sent_now ? " (first frame sent immediately)" : " (waiting for fresh live counter)");
 }
 
-static void continuous_ap_tick(uint32_t now) {
-    FSDState s = state_snapshot();
-    bool ap_disabled_now = g_cont_ap_last_ap_active && !s.ap_active;
-    g_cont_ap_last_ap_active = s.ap_active;
-
-    if (!s.continuous_ap) {
-        continuous_ap_reset("disabled");
-        return;
-    }
-
-    if (!fsd_can_transmit(&s)) {
-        continuous_ap_reset("TX disabled");
-        return;
-    }
-
+static void continuous_ap_tick_hw3_legacy(uint32_t now,
+                                          const FSDState &s,
+                                          bool ap_disabled_now) {
     bool torque_allows = continuous_ap_torque_allows(now, s);
     bool brake_allows = continuous_ap_brake_allows(now, s);
     bool stalk_stop_allows = continuous_ap_stalk_stop_allows(now, s);
@@ -832,7 +820,7 @@ static void continuous_ap_tick(uint32_t now) {
             if (!stalk_stop_allows) return;
             if (!torque_allows) return;
             if (s.ap_ready) {
-                continuous_ap_start_attempt(now);
+                continuous_ap_hw3_legacy_start_attempt(now);
             }
             return;
 
@@ -867,7 +855,60 @@ static void continuous_ap_tick(uint32_t now) {
                 }
                 return;
             }
-            continuous_ap_start_attempt(now);
+            continuous_ap_hw3_legacy_start_attempt(now);
+            return;
+    }
+}
+
+static void continuous_ap_hw4_start_attempt(uint32_t now) {
+    (void)now;
+    // TODO: implement HW4 re-engage frame sequence once HW4 control signals are identified.
+}
+
+static bool continuous_ap_hw4_reengage_allowed(uint32_t now, const FSDState &s) {
+    (void)now;
+    (void)s;
+    // TODO: implement HW4-specific kill switches and preconditions.
+    return false;
+}
+
+static void continuous_ap_tick_hw4(uint32_t now,
+                                   const FSDState &s,
+                                   bool ap_disabled_now) {
+    // TODO: implement HW4 Continuous AP using HW4 turn/AP controls instead of stalk frames.
+    if (ap_disabled_now &&
+        continuous_ap_turn_signal_active(s) &&
+        continuous_ap_hw4_reengage_allowed(now, s)) {
+        continuous_ap_hw4_start_attempt(now);
+    }
+}
+
+static void continuous_ap_tick(uint32_t now) {
+    FSDState s = state_snapshot();
+    bool ap_disabled_now = g_cont_ap_last_ap_active && !s.ap_active;
+    g_cont_ap_last_ap_active = s.ap_active;
+
+    if (!s.continuous_ap) {
+        continuous_ap_reset("disabled");
+        return;
+    }
+
+    if (!fsd_can_transmit(&s)) {
+        continuous_ap_reset("TX disabled");
+        return;
+    }
+
+    switch (s.hw_version) {
+        case TeslaHW_HW4:
+            continuous_ap_tick_hw4(now, s, ap_disabled_now);
+            return;
+        case TeslaHW_HW3:
+        case TeslaHW_Legacy:
+            continuous_ap_tick_hw3_legacy(now, s, ap_disabled_now);
+            return;
+        case TeslaHW_Unknown:
+        default:
+            continuous_ap_reset("HW unknown");
             return;
     }
 }
@@ -1118,8 +1159,10 @@ static void process_frame(CanBusId bus, const CanFrame &frame) {
         return;
     }
 
-    // ── Continuous AP state parsers (read-only, always) ─────────────────────
+    // ── Continuous AP HW3/Legacy state parsers (read-only, always) ──────────
     if (frame.id == CAN_ID_SCCM_RSTALK) {
+        FSDState s = state_snapshot();
+        if (s.hw_version != TeslaHW_HW3 && s.hw_version != TeslaHW_Legacy) return;
         uint32_t now_ms = millis();
         if (frame.dlc > SIG_GEAR_LEVER_POS_BYTE) {
             uint8_t gear_pos =
@@ -1144,7 +1187,6 @@ static void process_frame(CanBusId bus, const CanFrame &frame) {
             g_last_gear_counter_ms = now_ms;
         }
         if (frame.dlc > SIG_GEAR_LEVER_COUNTER_BYTE) {
-            FSDState s = state_snapshot();
             if (gear_sequence_active() && fsd_can_transmit(&s)) gear_sequence_tick(now_ms, "CONT-AP");
         }
         return;
