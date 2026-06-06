@@ -1377,7 +1377,6 @@ static void ws_event(uint8_t num, WStype_t type,
             g_state->ignore_ota = enabled;
             saved = *g_state;
             state_exit();
-            Serial.printf("[Web] Ignore OTA: %s\n", enabled ? "ON" : "OFF");
             prefs_save(&saved);
         }
     } else if (strstr(buf, "\"fsd_unlock\"")) {
@@ -1389,7 +1388,6 @@ static void ws_event(uint8_t num, WStype_t type,
             g_state->fsd_unlock = enabled;
             saved = *g_state;
             state_exit();
-            Serial.printf("[Web] FSD Unlock: %s\n", enabled ? "ON" : "OFF");
             prefs_save(&saved);
         }
     } else if (strstr(buf, "\"nag\"")) {
@@ -1401,7 +1399,6 @@ static void ws_event(uint8_t num, WStype_t type,
             g_state->nag_killer = enabled;
             saved = *g_state;
             state_exit();
-            Serial.printf("[Web] NAG Killer: %s\n", enabled ? "ON" : "OFF");
             prefs_save(&saved);
         }
     } else if (strstr(buf, "\"continuous_ap\"")) {
@@ -1413,7 +1410,6 @@ static void ws_event(uint8_t num, WStype_t type,
             g_state->continuous_ap = enabled;
             saved = *g_state;
             state_exit();
-            Serial.printf("[Web] Continuous AP: %s\n", enabled ? "ON" : "OFF");
             prefs_save(&saved);
         }
     }
@@ -1427,7 +1423,6 @@ static void ws_event(uint8_t num, WStype_t type,
             g_state->display_enabled = enabled;
             saved = *g_state;
             state_exit();
-            Serial.printf("[Web] Display: %s\n", enabled ? "ON" : "OFF");
             prefs_save(&saved);
         }
     } else if (strstr(buf, "\"disp_br\"")) {
@@ -1440,7 +1435,6 @@ static void ws_event(uint8_t num, WStype_t type,
             g_state->display_brightness = val;
             saved = *g_state;
             state_exit();
-            Serial.printf("[Web] Display Brightness: %u\n", val);
             prefs_save(&saved);
         }
     } else if (strstr(buf, "\"disp_to\"")) {
@@ -1452,7 +1446,6 @@ static void ws_event(uint8_t num, WStype_t type,
             g_state->display_timeout_s = val;
             saved = *g_state;
             state_exit();
-            Serial.printf("[Web] Display Timeout: %u s\n", val);
             prefs_save(&saved);
         }
     }
@@ -1466,7 +1459,6 @@ static void ws_event(uint8_t num, WStype_t type,
             g_state->bms_output = enabled;
             saved = *g_state;
             state_exit();
-            Serial.printf("[Web] BMS output: %s\n", enabled ? "ON" : "OFF");
             prefs_save(&saved);
         }
     } else if (strstr(buf, "\"tlssc_restore\"")) {
@@ -1478,7 +1470,6 @@ static void ws_event(uint8_t num, WStype_t type,
             g_state->tlssc_restore = enabled;
             saved = *g_state;
             state_exit();
-            Serial.printf("[Web] TLSSC Restore: %s\n", enabled ? "ON" : "OFF");
             prefs_save(&saved);
         }
     } else if (strstr(buf, "\"14x_warning\"")) {
@@ -1490,7 +1481,6 @@ static void ws_event(uint8_t num, WStype_t type,
             g_state->firmware_14x_warning = enabled;
             saved = *g_state;
             state_exit();
-            Serial.printf("[Web] 14.x Warning: %s\n", enabled ? "ON" : "OFF");
             prefs_save(&saved);
         }
     } else if (strstr(buf, "\"force_fsd\"")) {
@@ -1502,7 +1492,6 @@ static void ws_event(uint8_t num, WStype_t type,
             g_state->force_fsd = enabled;
             saved = *g_state;
             state_exit();
-            Serial.printf("[Web] Force FSD: %s\n", enabled ? "ON" : "OFF");
             prefs_save(&saved);
         }
     } else if (strstr(buf, "\"china_mode\"")) {
@@ -1514,7 +1503,6 @@ static void ws_event(uint8_t num, WStype_t type,
             g_state->china_mode = enabled;
             saved = *g_state;
             state_exit();
-            Serial.printf("[Web] China Mode: %s\n", enabled ? "ON" : "OFF");
             prefs_save(&saved);
         }
     } else if (strstr(buf, "\"suppress_speed_chime\"")) {
@@ -1526,7 +1514,6 @@ static void ws_event(uint8_t num, WStype_t type,
             g_state->suppress_speed_chime = enabled;
             saved = *g_state;
             state_exit();
-            Serial.printf("[Web] Suppress Speed Chime: %s\n", enabled ? "ON" : "OFF");
             prefs_save(&saved);
         }
     } else if (strstr(buf, "\"dump\"")) {
@@ -1535,7 +1522,6 @@ static void ws_event(uint8_t num, WStype_t type,
             bool want = (strncmp(vptr, "true", 4) == 0);
             if (want) can_dump_start();
             else      can_dump_stop();
-            Serial.printf("[Web] CAN Dump: %s\n", want ? "START" : "STOP");
         }
     } else if (strstr(buf, "\"sleep\"")) {
         if (vptr) {
@@ -1547,7 +1533,6 @@ static void ws_event(uint8_t num, WStype_t type,
                 g_state->sleep_idle_ms = val;
                 saved = *g_state;
                 state_exit();
-                Serial.printf("[Web] Sleep timeout: %u ms\n", val);
                 prefs_save(&saved);
             }
         }
@@ -1565,7 +1550,6 @@ static void ws_event(uint8_t num, WStype_t type,
             g_state->test_action_request = action;
             g_state->test_action_seq++;
             state_exit();
-            Serial.printf("[Web] Test action request: %u\n", (unsigned)action);
         }
     } else if (strstr(buf, "\"wifi_cfg\"")) {
         // Find the "value":{ object start
@@ -1636,8 +1620,6 @@ static void ws_event(uint8_t num, WStype_t type,
             }
             saved = *g_state;
             state_exit();
-            Serial.printf("[Web] WiFi config: AP=\"%s\" STA=\"%s\" PASS=*** HIDDEN=%d\n",
-                saved.wifi_ssid, saved.wifi_sta_ssid, saved.wifi_hidden);
             prefs_save(&saved);
             delay(500);
             ESP.restart();
@@ -1703,7 +1685,6 @@ static void handle_ota_upload() {
     HTTPUpload& upload = g_http.upload();
 
     if (upload.status == UPLOAD_FILE_START) {
-        Serial.printf("[OTA] Start: %s\n", upload.filename.c_str());
         if (!require_admin_auth()) {
             ota_error_flag = true;
             ota_error_msg = "Authentication required";
@@ -1727,8 +1708,6 @@ static void handle_ota_upload() {
         if (partition != NULL) {
             max_size = partition->size;
             ota_max_size = partition->size;
-            Serial.printf("[OTA] Target partition: %s, size: %u bytes\n",
-                partition->label, (unsigned)max_size);
         } else {
             Serial.println("[OTA] ERROR: No OTA partition available");
             ota_error_flag = true;
@@ -1743,8 +1722,6 @@ static void handle_ota_upload() {
             ota_error_msg = "Update.begin() failed";
             return;
         }
-
-        Serial.println("[OTA] Update started successfully");
     } else if (upload.status == UPLOAD_FILE_WRITE) {
         if (ota_error_flag) return;
         if (!ota_magic_checked) {
@@ -1774,11 +1751,7 @@ static void handle_ota_upload() {
             ota_error_msg = "Flash write failed";
             return;
         }
-
         ota_total_size += upload.currentSize;
-        if (ota_total_size % 65536 == 0) {
-            Serial.printf("[OTA] Progress: %u bytes\n", (unsigned)ota_total_size);
-        }
     } else if (upload.status == UPLOAD_FILE_END) {
         if (ota_error_flag) {
             Serial.println("[OTA] Upload aborted due to previous error");
@@ -1787,7 +1760,6 @@ static void handle_ota_upload() {
         }
 
         if (Update.end(true)) {
-            Serial.printf("[OTA] Success: %u bytes total\n", (unsigned)ota_total_size);
             if (!Update.isFinished()) {
                 Serial.println("[OTA] ERROR: Update not finished properly");
                 ota_error_flag = true;
@@ -1860,7 +1832,6 @@ void web_dashboard_init(FSDState *state,
     g_ws.begin();
     g_ws.onEvent(ws_event);
 
-    Serial.println("[Web] HTTP :80  WS :81 — ready");
 }
 
 void web_dashboard_update() {

@@ -26,22 +26,18 @@ bool wifi_ap_init(const FSDState *state) {
 
 static bool wifi_sta_init(const FSDState *state) {
     if (state->wifi_sta_ssid[0] == '\0') {
-        Serial.println("[WiFi] STA SSID not configured — starting AP");
         return false;
     }
 
     WiFi.mode(WIFI_STA);
     WiFi.begin(state->wifi_sta_ssid,
                state->wifi_sta_pass[0] == '\0' ? nullptr : state->wifi_sta_pass);
-    Serial.printf("[WiFi] Connecting to \"%s\"", state->wifi_sta_ssid);
 
     uint32_t start_ms = millis();
     while (WiFi.status() != WL_CONNECTED &&
            (uint32_t)(millis() - start_ms) < WIFI_STA_CONNECT_TIMEOUT_MS) {
         delay(250);
-        Serial.print(".");
     }
-    Serial.println();
 
     if (WiFi.status() == WL_CONNECTED) {
         String ip = WiFi.localIP().toString();

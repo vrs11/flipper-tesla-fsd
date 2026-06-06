@@ -133,11 +133,6 @@ public:
         stop_and_uninstall();
         if (!install_and_start(lo)) {
             Serial.printf("[CAN] %s TWAI filter switch FAILED\n", label_);
-        } else if (single) {
-            Serial.printf("[CAN] %s TWAI hardware filter -> 0x%03lX only (full-rate capture)\n",
-                          label_, (unsigned long)(id & 0x7FFu));
-        } else {
-            Serial.printf("[CAN] %s TWAI hardware filter -> accept all\n", label_);
         }
     }
 };
@@ -332,12 +327,38 @@ public:
         ok &= (merr == MCP2515::ERROR_OK);
         if (!ok) {
             Serial.printf("[CAN] %s MCP2515 filter switch FAILED\n", label_);
-        } else if (single) {
-            Serial.printf("[CAN] %s MCP2515 hardware filter -> 0x%03lX only (full-rate capture)\n",
-                          label_, (unsigned long)fid);
-        } else {
-            Serial.printf("[CAN] %s MCP2515 hardware filter -> accept all\n", label_);
         }
+    }
+
+    void setAcceptanceFilters(const uint32_t *ids, uint8_t count) override {
+        if (!installed_) return;
+        if (count == 0 || ids == nullptr) {
+            setAcceptanceFilter(false, 0);
+            return;
+        }
+
+        if (count > 6) count = 6;
+
+        // MCP2515 provides six standard-ID filters. Use exact-match masks on
+        // both RX buffers and repeat the first id into unused filters so the
+        // whitelist does not accidentally accept id 0x000.
+        bool ok = true;
+        ok &= (mcp_.setFilterMask(MCP2515::MASK0, false, 0x7FFu) == MCP2515::ERROR_OK);
+        ok &= (mcp_.setFilterMask(MCP2515::MASK1, false, 0x7FFu) == MCP2515::ERROR_OK);
+        const MCP2515::RXF rxf[6] = {MCP2515::RXF0, MCP2515::RXF1, MCP2515::RXF2,
+                                     MCP2515::RXF3, MCP2515::RXF4, MCP2515::RXF5};
+        for (uint8_t i = 0; i < 6; i++) {
+            uint32_t fid = ids[(i < count) ? i : 0] & 0x7FFu;
+            ok &= (mcp_.setFilter(rxf[i], false, fid) == MCP2515::ERROR_OK);
+        }
+
+        MCP2515::ERROR merr = listen_only_ ? mcp_.setListenOnlyMode() : mcp_.setNormalMode();
+        ok &= (merr == MCP2515::ERROR_OK);
+        if (!ok) {
+            Serial.printf("[CAN] %s MCP2515 filter whitelist FAILED\n", label_);
+            return;
+        }
+
     }
 };
 #endif

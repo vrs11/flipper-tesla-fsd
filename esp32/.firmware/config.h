@@ -116,6 +116,21 @@
 #define DAS_CONTROL_ACTION_TX_BUS_INDEX 0
 #endif
 
+// T-2CAN can1 receive whitelist. This is applied only in Active mode and only
+// on BOARD_LILYGO_T2CAN, so Listen-Only logging remains accept-all.
+#ifndef CAN1_REPO_FILTER_ENABLED
+#define CAN1_REPO_FILTER_ENABLED 1
+#endif
+#ifndef CAN1_REPO_FILTER_IDS
+#define CAN1_REPO_FILTER_IDS \
+    CAN_ID_SCCM_RSTALK,      \
+    CAN_ID_VCLEFT_SWITCH,    \
+    CAN_ID_VCFRONT_LIGHT,    \
+    CAN_ID_BMS_HV_BUS,       \
+    CAN_ID_BMS_SOC,          \
+    CAN_ID_BMS_THERMAL
+#endif
+
 // Observed 0x3C2 right-wheel payload shape:
 //   neutral: 29 55 00 00 00 00 00 80
 //   scroll:  byte3 contains signed 6-bit tick count, no CRC field observed.
@@ -147,7 +162,7 @@
 #define STATUS_PRINT_MS       5000u   // Periodic status line when Active
 #define WIFI_STA_CONNECT_TIMEOUT_MS 10000u  // Try saved infrastructure WiFi before AP fallback
 #ifndef GEAR_LEVER_CACHED_COUNTER_MAX_AGE_MS
-#define GEAR_LEVER_CACHED_COUNTER_MAX_AGE_MS 150u  // Immediate 0x229 TX only if latest live counter is fresh
+#define GEAR_LEVER_CACHED_COUNTER_MAX_AGE_MS 500u  // Immediate 0x229 TX only if latest live counter is fresh
 #endif
 #ifndef GEAR_SEQUENCE_STEP_MS
 #define GEAR_SEQUENCE_STEP_MS 40u  // Gap between generated 0x229 press/release sequence frames
@@ -158,10 +173,10 @@
 #ifndef VCLEFT_SWITCH_CACHED_FRAME_MAX_AGE_MS
 #define VCLEFT_SWITCH_CACHED_FRAME_MAX_AGE_MS 150u  // Immediate 0x3C2 TX only if latest wheel frame is fresh
 #endif
-#define CONT_AP_READY_TIMEOUT_MS         5000u
-#define CONT_AP_REENGAGE_DELAY_MS        1500u
-#define CONT_AP_ATTEMPT_RESULT_MS        2000u
-#define CONT_AP_RETRY_DELAY_MS           1000u
+#define CONT_AP_READY_WAIT_TIMEOUT_MS    6000u
+#define CONT_AP_REENGAGE_DELAY_MS        1000u
+#define CONT_AP_ATTEMPT_RESULT_MS         700u
+#define CONT_AP_RETRY_DELAY_MS            300u
 #ifndef CONT_AP_STEERING_TORQUE_ABORT_NM
 #define CONT_AP_STEERING_TORQUE_ABORT_NM 2.5f
 #endif
