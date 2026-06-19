@@ -377,7 +377,7 @@ void fsd_handle_epas_steering_mode(FSDState* state, const CANFRAME* frame) {
 void fsd_handle_esp_status(FSDState* state, const CANFRAME* frame) {
     if(frame->data_lenght < 4) return;
     uint8_t brake = (frame->buffer[3] >> 5) & 0x03;
-    state->driver_brake_applied = (brake == 2);
+    state->driver_brake_applied = (brake >= 2);
 }
 
 // --- GTW_epasControl (0x101) steering tune WRITE ---
