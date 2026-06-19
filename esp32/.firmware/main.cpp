@@ -192,13 +192,9 @@ static bool send_modified_frame(CanBusId bus, const CanFrame &frame) {
     return send_on_bus(bus, frame);
 }
 
-static CanFrame g_last_vcleft_switch_frame = {};
-static bool g_last_vcleft_switch_valid = false;
-static uint32_t g_last_vcleft_switch_ms = 0;
 static uint8_t g_last_gear_counter = 0;
 static bool g_last_gear_counter_valid = false;
 static uint32_t g_last_gear_counter_ms = 0;
-static uint32_t g_set_speed_40_until_ms = 0;
 
 enum ContinuousApFlowState : uint8_t {
     ContAp_Idle = 0,
@@ -236,22 +232,9 @@ enum GearSequenceSendResult : uint8_t {
     GearSeqSend_TxFailed,
 };
 
-struct TestScrollBurst {
-    bool active;
-    int8_t ticks;
-    uint8_t remaining_steps;
-    uint32_t next_ms;
-};
-
-static TestScrollBurst g_test_scroll = {};
-
 static CanBusId preferred_generated_bus(uint32_t frame_id) {
-    if (frame_id == CAN_ID_VCLEFT_SWITCH)
-        return configured_bus_from_index(WHEEL_ACTION_TX_BUS_INDEX);
     if (frame_id == CAN_ID_SCCM_RSTALK)
         return configured_bus_from_index(GEAR_LEVER_TX_BUS_INDEX);
-    if (frame_id == CAN_ID_DAS_CONTROL)
-        return configured_bus_from_index(DAS_CONTROL_ACTION_TX_BUS_INDEX);
     return CAN_BUS_PRIMARY;
 }
 
@@ -361,31 +344,6 @@ static GearSequenceSendResult arm_gear_ap_double_press_sequence(uint32_t now) {
     return gear_sequence_tick(now, "CONT-AP");
 }
 
-static bool cached_vcleft_switch_is_fresh(uint32_t now) {
-    return g_last_vcleft_switch_valid &&
-           g_last_vcleft_switch_ms != 0u &&
-           g_last_vcleft_switch_frame.dlc > SIG_VCLEFT_RIGHT_SCROLL_BYTE &&
-           (uint32_t)(now - g_last_vcleft_switch_ms) <= VCLEFT_SWITCH_CACHED_FRAME_MAX_AGE_MS;
-}
-
-static bool send_right_scroll_from_cached_frame(int8_t ticks, const char *name) {
-    (void)name;
-    uint32_t now = millis();
-    if (!cached_vcleft_switch_is_fresh(now)) return false;
-
-    FSDState s = state_snapshot();
-    if (!fsd_can_transmit(&s)) return false;
-
-    CanFrame f = g_last_vcleft_switch_frame;
-    f.data[SIG_VCLEFT_RIGHT_SCROLL_BYTE] =
-        (f.data[SIG_VCLEFT_RIGHT_SCROLL_BYTE] & (uint8_t)(~SIG_VCLEFT_RIGHT_SCROLL_MASK)) |
-        ((uint8_t)ticks & SIG_VCLEFT_RIGHT_SCROLL_MASK);
-
-    CanBusId bus = preferred_generated_bus(CAN_ID_VCLEFT_SWITCH);
-    bool sent = send_generated_frame(bus, f);
-    return sent;
-}
-
 static const char *hw_to_str(TeslaHWVersion hw) {
     switch (hw) {
         case TeslaHW_HW4:    return "HW4";
@@ -450,6 +408,59 @@ static void sync_can1_repo_filter_if_needed() {
 static void sync_can1_repo_filter_if_needed() {}
 #endif
 
+static void sync_http_can_stream_filter_if_needed() {
+    static bool initialized = false;
+    static bool last_hw_active = false;
+    static uint8_t last_count = 0;
+    static uint32_t last_ids[6] = {};
+
+    FSDState s = state_snapshot();
+    uint32_t ids[6] = {};
+    uint8_t count = 0;
+    bool stream_active = (s.op_mode == OpMode_ListenOnly) &&
+                         http_can_stream_filter_snapshot(ids, 6, &count);
+    bool hw_active = stream_active && count > 0 && count <= 6;
+
+    if (!initialized && !stream_active) {
+        initialized = true;
+        return;
+    }
+
+    bool changed = !initialized || last_hw_active != hw_active || last_count != count;
+    for (uint8_t i = 0; !changed && i < count && i < 6; i++) {
+        changed = ((last_ids[i] & 0x7FFu) != (ids[i] & 0x7FFu));
+    }
+    if (!changed) return;
+
+    initialized = true;
+    last_hw_active = hw_active;
+    last_count = count;
+    for (uint8_t i = 0; i < 6; i++) {
+        last_ids[i] = (i < count) ? (ids[i] & 0x7FFu) : 0u;
+    }
+
+    if (hw_active) {
+        for (uint8_t i = 0; i < CAN_ACTIVE_BUS_COUNT; i++) {
+            if (g_can[i] && g_can_ok[i]) {
+                g_can[i]->setAcceptanceFilters(ids, count);
+            }
+        }
+        Serial.printf("[HTTP-CAN] Hardware RX filter enabled ids=%u\n", count);
+        return;
+    }
+
+    for (uint8_t i = 0; i < CAN_ACTIVE_BUS_COUNT; i++) {
+        if (g_can[i] && g_can_ok[i]) {
+            g_can[i]->setAcceptanceFilters(nullptr, 0);
+        }
+    }
+    if (stream_active && count > 6) {
+        Serial.printf("[HTTP-CAN] Hardware RX filter disabled ids=%u exceeds hardware limit\n", count);
+    } else {
+        Serial.println("[HTTP-CAN] Hardware RX filter disabled");
+    }
+}
+
 static const char *can1_repo_filter_status(const FSDState &s) {
 #if defined(CAN_DRIVER_T2CAN_DUAL) && defined(BOARD_LILYGO_T2CAN)
     if (!g_can[1] || !g_can_ok[1]) return "down";
@@ -479,65 +490,6 @@ static void apply_detected_hw(TeslaHWVersion hw, const char *reason) {
     Serial.printf("[HW] Auto-detected: %s (%s)\n", hw_str, reason);
     can_dump_log("HW  auto-detected: %s (%s)", hw_str, reason);
     apply_can1_repo_filter();
-}
-
-static void run_test_action(TestActionRequest action, uint32_t seq) {
-    (void)seq;
-
-    switch (action) {
-        case TestAction_RightWheelShort:
-            g_test_scroll.active = true;
-            g_test_scroll.ticks = 1;
-            g_test_scroll.remaining_steps = 2; // tick, then neutral release
-            g_test_scroll.next_ms = 0;
-            break;
-        case TestAction_RightWheelBurst:
-            g_test_scroll.active = true;
-            g_test_scroll.ticks = 5;
-            g_test_scroll.remaining_steps = 2; // +5 tick, then neutral release
-            g_test_scroll.next_ms = 0;
-            break;
-        case TestAction_SetCruise40:
-            g_set_speed_40_until_ms = millis() + 3000u;
-            break;
-        case TestAction_None:
-        default:
-            break;
-    }
-}
-
-static void test_action_tick() {
-    TestActionRequest action = TestAction_None;
-    uint32_t seq = 0;
-    state_enter();
-    if (g_state.test_action_request != TestAction_None) {
-        action = g_state.test_action_request;
-        seq = g_state.test_action_seq;
-        g_state.test_action_request = TestAction_None;
-    }
-    state_exit();
-    if (action != TestAction_None) run_test_action(action, seq);
-}
-
-static void test_scroll_tick(uint32_t now) {
-    if (!g_test_scroll.active) return;
-    if (g_test_scroll.next_ms != 0u && (int32_t)(now - g_test_scroll.next_ms) < 0) return;
-
-    uint8_t step_index = g_test_scroll.remaining_steps;
-    bool send_tick = (step_index % 2u) == 0u;
-    bool sent = send_right_scroll_from_cached_frame(send_tick ? g_test_scroll.ticks : 0,
-                                                   send_tick ? "TEST wheel pulse" : "TEST wheel neutral");
-    if (!sent) {
-        g_test_scroll.next_ms = now + 10u;
-        return;
-    }
-
-    if (g_test_scroll.remaining_steps > 0u) g_test_scroll.remaining_steps--;
-    if (g_test_scroll.remaining_steps == 0u) {
-        g_test_scroll.active = false;
-    } else {
-        g_test_scroll.next_ms = now + 90u;
-    }
 }
 
 static const char *continuous_ap_state_name(ContinuousApFlowState state) {
@@ -1085,13 +1037,13 @@ static void process_frame(CanBusId bus, const CanFrame &frame) {
     }
     if (frame.id == CAN_ID_UI_MAP_DATA) {
         state_enter();
-        fsd_handle_ui_map_data(&g_state, &frame, millis());
+        fsd_handle_ui_map_data(&g_state, &frame);
         state_exit();
         return;
     }
     if (frame.id == CAN_ID_DAS_STATUS2) {
         state_enter();
-        fsd_handle_das_status2(&g_state, &frame, millis());
+        fsd_handle_das_status2(&g_state, &frame);
         state_exit();
         return;
     }
@@ -1099,27 +1051,6 @@ static void process_frame(CanBusId bus, const CanFrame &frame) {
         state_enter();
         fsd_handle_das_control(&g_state, &frame);
         state_exit();
-        if (g_set_speed_40_until_ms != 0u && (int32_t)(millis() - g_set_speed_40_until_ms) < 0) {
-            FSDState s = state_snapshot();
-            if (fsd_can_transmit(&s)) {
-                CanFrame f = frame;
-                fsd_set_das_control_speed(&f, 40.0f);
-                send_modified_frame(preferred_generated_bus(CAN_ID_DAS_CONTROL), f);
-            }
-        } else {
-            g_set_speed_40_until_ms = 0u;
-        }
-        return;
-    }
-    if (frame.id == CAN_ID_VCLEFT_SWITCH) {
-        uint32_t now_ms = millis();
-        if (frame.dlc > SIG_VCLEFT_RIGHT_SCROLL_BYTE &&
-            (frame.data[SIG_VCLEFT_SWITCH_MUX_BYTE] & SIG_VCLEFT_SWITCH_MUX_MASK) ==
-                SIG_VCLEFT_SWITCH_MUX_WHEEL) {
-            g_last_vcleft_switch_frame = frame;
-            g_last_vcleft_switch_valid = true;
-            g_last_vcleft_switch_ms = now_ms;
-        }
         return;
     }
     if (frame.id == CAN_ID_VCFRONT_LIGHT) {
@@ -1463,8 +1394,6 @@ void loop() {
         last_err_ms = now;
     }
 
-    test_action_tick();
-    test_scroll_tick(now);
     continuous_ap_tick(now);
 
     // ── Precondition frame injection ──────────────────────────────────────────
@@ -1584,6 +1513,7 @@ void loop() {
 
     // ── Web dashboard (after CAN to preserve CAN frame latency) ──────────────
     web_dashboard_update();
+    sync_http_can_stream_filter_if_needed();
     sync_can1_repo_filter_if_needed();
 
 #if defined(BOARD_TTGO_DISPLAY)

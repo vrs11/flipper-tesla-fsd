@@ -40,8 +40,8 @@ void prefs_load(FSDState *state) {
     state->op_mode = (OpMode)g_prefs.getUChar("mode", (uint8_t)OpMode_ListenOnly);
     
     Serial.printf("[NVS] Loaded: FSDUnlock=%d NAG=%d ContinuousAP=%d IgnoreOTA=%d China=%d Chime=%d Sleep=%u AP=\"%s\" STA=\"%s\" HIDDEN=%d\n",
-                  state->fsd_unlock, state->nag_killer, state->continuous_ap, state->ignore_ota,
-                  state->china_mode, state->suppress_speed_chime,
+                  state->fsd_unlock, state->nag_killer, state->continuous_ap,
+                  state->ignore_ota, state->china_mode, state->suppress_speed_chime,
                   state->sleep_idle_ms, state->wifi_ssid, state->wifi_sta_ssid,
                   state->wifi_hidden);
     g_prefs.end();
@@ -86,8 +86,8 @@ void prefs_save(const FSDState *state) {
     g_prefs.putUChar("mode",  (uint8_t)state->op_mode);
     
     Serial.printf("[NVS] Saved: FSDUnlock=%d NAG=%d ContinuousAP=%d IgnoreOTA=%d China=%d Chime=%d Sleep=%u AP=\"%s\" STA=\"%s\" HIDDEN=%d\n",
-                  state->fsd_unlock, state->nag_killer, state->continuous_ap, state->ignore_ota,
-                  state->china_mode, state->suppress_speed_chime,
+                  state->fsd_unlock, state->nag_killer, state->continuous_ap,
+                  state->ignore_ota, state->china_mode, state->suppress_speed_chime,
                   state->sleep_idle_ms, state->wifi_ssid, state->wifi_sta_ssid,
                   state->wifi_hidden);
     g_prefs.end();

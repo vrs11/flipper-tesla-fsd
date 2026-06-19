@@ -101,10 +101,10 @@ void fsd_handle_das_handsonly_399(FSDState *state, const CanFrame *frame);
 void fsd_handle_gear_lever(FSDState *state, const CanFrame *frame, uint32_t now_ms);
 
 /** Parse UI_driverAssistMapData 0x238 map/location speed limit. */
-void fsd_handle_ui_map_data(FSDState *state, const CanFrame *frame, uint32_t now_ms);
+void fsd_handle_ui_map_data(FSDState *state, const CanFrame *frame);
 
 /** Parse DAS_status2 0x389 ACC speed-limit readback. */
-void fsd_handle_das_status2(FSDState *state, const CanFrame *frame, uint32_t now_ms);
+void fsd_handle_das_status2(FSDState *state, const CanFrame *frame);
 
 /** Parse DAS_control 0x2B9 cruise/AP set speed. */
 void fsd_handle_das_control(FSDState *state, const CanFrame *frame);
@@ -112,11 +112,5 @@ void fsd_handle_das_control(FSDState *state, const CanFrame *frame);
 /** Parse VCFRONT_lighting 0x3F5 turn signal request state. */
 void fsd_handle_vcfront_lighting(FSDState *state, const CanFrame *frame);
 
-/** Build VCLEFT_switchStatus 0x3C2 right-scroll-wheel frame. */
-void fsd_build_right_scroll_frame(CanFrame *frame, int8_t ticks);
-
 /** Build GearLever / right stalk 0x229 with rolling counter and CRC byte. */
 bool fsd_build_gear_lever_frame(CanFrame *frame, uint8_t gear_pos, uint8_t counter);
-
-/** Modify a live DAS_control 0x2B9 frame to a specific set speed and checksum. */
-void fsd_set_das_control_speed(CanFrame *frame, float speed_kph);

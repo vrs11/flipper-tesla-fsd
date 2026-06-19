@@ -27,8 +27,8 @@ class TwaiDriver : public CanDriver {
     bool     installed_   = false;
     uint32_t tx_count_    = 0;
     uint32_t rx_count_    = 0;
-    bool     filter_single_ = false;  // accept only filter_id_ when true
-    uint32_t filter_id_     = 0;      // standard 11-bit id for single-id capture
+    uint8_t  filter_count_ = 0;
+    uint32_t filter_ids_[6] = {};
 
     bool install_and_start(bool listen_only) {
         twai_general_config_t g = TWAI_GENERAL_CONFIG_DEFAULT(
@@ -42,12 +42,24 @@ class TwaiDriver : public CanDriver {
 
         twai_timing_config_t t = TWAI_TIMING_CONFIG_500KBITS();
         twai_filter_config_t f;
-        if (filter_single_) {
-            // Standard-frame single filter: match exactly filter_id_. The id
-            // sits in bits [31:21] of the acceptance code; mask bits set to 1
-            // are "don't care", so we clear only the 11 id bits.
-            f.acceptance_code = (filter_id_ & 0x7FFu) << 21;
-            f.acceptance_mask = ~(((uint32_t)0x7FFu) << 21);
+        if (filter_count_ > 0) {
+            // Standard-frame hardware prefilter. TWAI has one acceptance
+            // code/mask, so an exact whitelist is only possible for one ID.
+            // For multiple IDs, match the common ID bits and leave differing
+            // bits as don't-care; software filtering still enforces the final
+            // list, while hardware drops a large part of unrelated traffic.
+            uint32_t common_ones  = filter_ids_[0] & 0x7FFu;
+            uint32_t common_zeros = (~filter_ids_[0]) & 0x7FFu;
+            for (uint8_t i = 1; i < filter_count_; i++) {
+                uint32_t id = filter_ids_[i] & 0x7FFu;
+                common_ones  &= id;
+                common_zeros &= (~id) & 0x7FFu;
+            }
+            uint32_t fixed_bits = (common_ones | common_zeros) & 0x7FFu;
+            uint32_t code_id = common_ones & fixed_bits;
+            uint32_t mask_id = (~fixed_bits) & 0x7FFu;
+            f.acceptance_code = code_id << 21;
+            f.acceptance_mask = (mask_id << 21) | 0x001FFFFFu;
             f.single_filter   = true;
         } else {
             f = TWAI_FILTER_CONFIG_ACCEPT_ALL();
@@ -125,10 +137,25 @@ public:
     }
 
     void setAcceptanceFilter(bool single, uint32_t id) override {
-        if (filter_single_ == single && (!single || filter_id_ == id)) return;
-        filter_single_ = single;
-        filter_id_     = id;
-        if (!installed_) return;  // begin() will pick up the new filter
+        if (single) setAcceptanceFilters(&id, 1);
+        else setAcceptanceFilters(nullptr, 0);
+    }
+
+    void setAcceptanceFilters(const uint32_t *ids, uint8_t count) override {
+        if (ids == nullptr) count = 0;
+        if (count > 6) count = 6;
+        bool same = filter_count_ == count;
+        for (uint8_t i = 0; same && i < count; i++) {
+            same = ((filter_ids_[i] & 0x7FFu) == (ids[i] & 0x7FFu));
+        }
+        if (same) return;
+
+        filter_count_ = count;
+        for (uint8_t i = 0; i < count; i++) {
+            filter_ids_[i] = ids[i] & 0x7FFu;
+        }
+        if (!installed_) return;  // begin() will pick up the new filter.
+
         bool lo = listen_only_;
         stop_and_uninstall();
         if (!install_and_start(lo)) {

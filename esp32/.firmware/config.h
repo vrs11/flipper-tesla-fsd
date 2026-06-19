@@ -102,18 +102,12 @@
 
 // ── Generated TX routing ─────────────────────────────────────────────────────
 // Bus index: 0=can0, 1=can1. Single-CAN builds only have can0.
-#ifndef WHEEL_ACTION_TX_BUS_INDEX
-#define WHEEL_ACTION_TX_BUS_INDEX 0
-#endif
 #ifndef GEAR_LEVER_TX_BUS_INDEX
 #if defined(BOARD_LILYGO_T2CAN)
 #define GEAR_LEVER_TX_BUS_INDEX 1
 #else
 #define GEAR_LEVER_TX_BUS_INDEX 0
 #endif
-#endif
-#ifndef DAS_CONTROL_ACTION_TX_BUS_INDEX
-#define DAS_CONTROL_ACTION_TX_BUS_INDEX 0
 #endif
 
 // T-2CAN can1 receive whitelist. This is applied only in Active mode and only
@@ -129,19 +123,6 @@
     CAN_ID_BMS_HV_BUS,       \
     CAN_ID_BMS_SOC,          \
     CAN_ID_BMS_THERMAL
-#endif
-
-// Observed 0x3C2 right-wheel payload shape:
-//   neutral: 29 55 00 00 00 00 00 80
-//   scroll:  byte3 contains signed 6-bit tick count, no CRC field observed.
-#ifndef VCLEFT_RIGHT_SCROLL_BYTE0
-#define VCLEFT_RIGHT_SCROLL_BYTE0 0x29u
-#endif
-#ifndef VCLEFT_RIGHT_SCROLL_BYTE1
-#define VCLEFT_RIGHT_SCROLL_BYTE1 0x55u
-#endif
-#ifndef VCLEFT_RIGHT_SCROLL_BYTE7
-#define VCLEFT_RIGHT_SCROLL_BYTE7 0x80u
 #endif
 
 // MCP2515 oscillator. Generic breakout modules often use 8 MHz; the LilyGO

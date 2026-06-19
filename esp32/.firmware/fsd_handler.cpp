@@ -609,7 +609,7 @@ void fsd_handle_gear_lever(FSDState *state, const CanFrame *frame, uint32_t now_
     last_seen_ms = now_ms;
 }
 
-void fsd_handle_ui_map_data(FSDState *state, const CanFrame *frame, uint32_t now_ms) {
+void fsd_handle_ui_map_data(FSDState *state, const CanFrame *frame) {
     if (frame->dlc < 2) return;
     uint8_t raw =
         frame->data[SIG_UI_MAP_SPEED_LIMIT_BYTE] & SIG_UI_MAP_SPEED_LIMIT_MASK;
@@ -629,10 +629,9 @@ void fsd_handle_ui_map_data(FSDState *state, const CanFrame *frame, uint32_t now
     state->speed_limit_kph = state->map_speed_limit_kph;
     state->speed_limit_source = SpeedLimitSource_Map;
     state->speed_limit_seen = true;
-    state->speed_limit_last_ms = now_ms;
 }
 
-void fsd_handle_das_status2(FSDState *state, const CanFrame *frame, uint32_t now_ms) {
+void fsd_handle_das_status2(FSDState *state, const CanFrame *frame) {
     if (frame->dlc < 2) return;
     uint16_t raw =
         ((uint16_t)(frame->data[SIG_DAS_ACC_SPEED_LIMIT_HIGH_BYTE] &
@@ -646,7 +645,6 @@ void fsd_handle_das_status2(FSDState *state, const CanFrame *frame, uint32_t now
         state->speed_limit_kph = kph;
         state->speed_limit_source = SpeedLimitSource_Acc;
         state->speed_limit_seen = true;
-        state->speed_limit_last_ms = now_ms;
     }
 }
 
@@ -676,18 +674,6 @@ void fsd_handle_vcfront_lighting(FSDState *state, const CanFrame *frame) {
     state->turn_status_seen = true;
 }
 
-void fsd_build_right_scroll_frame(CanFrame *frame, int8_t ticks) {
-    memset(frame, 0, sizeof(CanFrame));
-    frame->id = CAN_ID_VCLEFT_SWITCH;
-    frame->dlc = 8;
-    // Neutral observed payload: 29 55 00 00 00 00 00 80.
-    frame->data[0] = VCLEFT_RIGHT_SCROLL_BYTE0; // mux=1 plus neutral left/right wheel switch states.
-    frame->data[1] = VCLEFT_RIGHT_SCROLL_BYTE1;
-    frame->data[2] = 0x00u;
-    frame->data[3] = (uint8_t)ticks & SIG_VCLEFT_RIGHT_SCROLL_MASK;
-    frame->data[7] = VCLEFT_RIGHT_SCROLL_BYTE7;
-}
-
 bool fsd_build_gear_lever_frame(CanFrame *frame, uint8_t gear_pos, uint8_t counter) {
     static const uint8_t NEUTRAL_CRC_BY_COUNTER[16] = {
         0x46u, 0x44u, 0x52u, 0x6Du, 0x43u, 0x41u, 0xDDu, 0xF9u,
@@ -711,31 +697,4 @@ bool fsd_build_gear_lever_frame(CanFrame *frame, uint8_t gear_pos, uint8_t count
     frame->data[2] = 0x00u;
     frame->data[0] = NEUTRAL_CRC_BY_COUNTER[counter] ^ POSITION_CRC_XOR[gear_pos];
     return true;
-}
-
-void fsd_set_das_control_speed(CanFrame *frame, float speed_kph) {
-    if (frame->dlc < CAN_FRAME_MAX_DATA_LEN) return;
-    if (speed_kph < 0.0f) speed_kph = 0.0f;
-    if (speed_kph > 409.4f) speed_kph = 409.4f;
-    uint16_t raw = (uint16_t)(speed_kph / SIG_DAS_CONTROL_SET_SPEED_SCALE_KPH + 0.5f);
-    if (raw > 0x0FFEu) raw = 0x0FFEu;
-
-    frame->data[SIG_DAS_CONTROL_SET_SPEED_LOW_BYTE] = (uint8_t)(raw & 0xFFu);
-    frame->data[SIG_DAS_CONTROL_SET_SPEED_HIGH_BYTE] =
-        (frame->data[SIG_DAS_CONTROL_SET_SPEED_HIGH_BYTE] &
-         (uint8_t)(~SIG_DAS_CONTROL_SET_SPEED_HIGH_MASK)) |
-        (uint8_t)((raw >> 8) & SIG_DAS_CONTROL_SET_SPEED_HIGH_MASK);
-
-    uint8_t counter =
-        (frame->data[SIG_DAS_CONTROL_COUNTER_BYTE] >> SIG_DAS_CONTROL_COUNTER_SHIFT) &
-        SIG_DAS_CONTROL_COUNTER_MASK;
-    counter = (counter + 1u) & SIG_DAS_CONTROL_COUNTER_MASK;
-    frame->data[SIG_DAS_CONTROL_COUNTER_BYTE] =
-        (frame->data[SIG_DAS_CONTROL_COUNTER_BYTE] & SIG_DAS_CONTROL_COUNTER_KEEP_MASK) |
-        (uint8_t)(counter << SIG_DAS_CONTROL_COUNTER_SHIFT);
-
-    uint16_t sum = 0;
-    for (int i = 0; i < 7; i++) sum += frame->data[i];
-    sum += (CAN_ID_DAS_CONTROL & 0xFFu) + (CAN_ID_DAS_CONTROL >> 8);
-    frame->data[SIG_DAS_CONTROL_CHECKSUM_BYTE] = (uint8_t)(sum & 0xFFu);
 }

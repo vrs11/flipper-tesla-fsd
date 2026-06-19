@@ -168,14 +168,6 @@
 #define SIG_GEAR_LEVER_COUNTER_BYTE         1
 #define SIG_GEAR_LEVER_COUNTER_MASK      0x0Fu
 
-// VCLEFT_switchStatus (0x3C2), little-endian:
-//   mux: bit0|2, swcRightScrollTicks: bit24|6 signed
-#define SIG_VCLEFT_SWITCH_MUX_BYTE          0
-#define SIG_VCLEFT_SWITCH_MUX_MASK       0x03u
-#define SIG_VCLEFT_SWITCH_MUX_WHEEL         1u
-#define SIG_VCLEFT_RIGHT_SCROLL_BYTE        3
-#define SIG_VCLEFT_RIGHT_SCROLL_MASK     0x3Fu
-
 // VCFRONT_lighting (0x3F5), little-endian:
 //   indicatorLeftRequest: bit0|2, indicatorRightRequest: bit2|2.
 //   0=off, 1=active low, 2=active high.
@@ -221,10 +213,3 @@
 #define SIG_DAS_CONTROL_SET_SPEED_HIGH_MASK 0x0Fu
 #define SIG_DAS_CONTROL_SET_SPEED_SNA    0x0FFFu
 #define SIG_DAS_CONTROL_SET_SPEED_SCALE_KPH 0.1f
-#define SIG_DAS_CONTROL_ACC_STATE_SHIFT     4
-#define SIG_DAS_CONTROL_ACC_STATE_MASK   0x0Fu
-#define SIG_DAS_CONTROL_COUNTER_BYTE        6
-#define SIG_DAS_CONTROL_COUNTER_SHIFT       5
-#define SIG_DAS_CONTROL_COUNTER_MASK     0x07u
-#define SIG_DAS_CONTROL_COUNTER_KEEP_MASK 0x1Fu
-#define SIG_DAS_CONTROL_CHECKSUM_BYTE       7

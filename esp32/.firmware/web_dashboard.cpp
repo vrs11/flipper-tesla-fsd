@@ -259,13 +259,9 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
 .log-filter{width:210px;max-width:60%;background:var(--card2);border:1px solid var(--border);
   color:var(--text);border-radius:6px;padding:6px 8px;font-size:.8em;text-align:right}
 .log-filter::placeholder{color:var(--text3)}
-.action-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:10px}
 .action-dot{display:inline-flex;align-items:center;gap:7px;color:var(--text2);font-size:.78em}
 .blinkdot{width:10px;height:10px;border-radius:50%;background:var(--text3);box-shadow:none;transition:.15s}
 .blinkdot.hit{background:var(--accent);box-shadow:0 0 10px var(--accent)}
-.test-btn{padding:10px 8px;border-radius:10px;border:1px solid rgba(77,171,247,.3);
-  background:rgba(77,171,247,.12);color:var(--blue);font-size:.74em;font-weight:700}
-.test-btn:disabled{opacity:.4;color:var(--text3);border-color:var(--border);background:var(--card2)}
 .metric{font-size:.95em;font-weight:700;font-variant-numeric:tabular-nums}
 .metric small{font-size:.72em;color:var(--text3);font-weight:600}
 </style>
@@ -349,29 +345,6 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
     <span class="lbl">CAN Vehicle</span>
     <span class="pill off" id="canVeh"><span class="pd"></span>--</span>
   </div>
-</div>
-
-<!-- Temporary Action Test -->
-<div class="card">
-  <div class="card-head"><div class="icon ic-c">T</div><h2>Action Test</h2></div>
-  <div class="row">
-    <span class="lbl">AP Ready</span>
-    <span class="pill off" id="apReady"><span class="pd"></span>--</span>
-  </div>
-  <div class="row">
-    <span class="lbl">Detected Limit</span>
-    <span class="metric" id="detLimit">--</span>
-  </div>
-  <div class="row">
-    <span class="lbl">Cruise/AP Set</span>
-    <span class="metric" id="cruiseSet">--</span>
-  </div>
-  <div class="action-grid">
-    <button class="test-btn" onclick="testAction('wheel_short')">WHEEL +1</button>
-    <button class="test-btn" onclick="testAction('wheel_burst')">WHEEL +5</button>
-    <button class="test-btn" id="btnSet40" onclick="testAction('set_40')">SET 40 KM/H</button>
-  </div>
-  <div class="log-info" id="testInfo">Wheel and set-speed buttons send test frames only when TX is enabled.</div>
 </div>
 
 <!-- Battery -->
@@ -668,11 +641,6 @@ function dot(id,on){
   var e=document.getElementById(id);
   if(e)e.className='blinkdot'+(on?' hit':'');
 }
-function speedText(v,seen,source){
-  if(!seen)return '--';
-  var src=source?'<small> '+source+'</small>':'';
-  return Math.round(v)+' km/h'+src;
-}
 function updateControlsSummary(d){
   var e=document.getElementById('controlsSummary');
   if(!e)return;
@@ -716,19 +684,6 @@ function upd(d){
   pill('bmsSt', d.bms && d.bms.seen, (d.bms && d.bms.seen)?'Live':'Waiting Frames');
   var bF=document.getElementById('bmsFrames');
   if(bF) bF.textContent='HV:'+(d.bms_hv_seen||0)+' SOC:'+(d.bms_soc_seen||0)+' TH:'+(d.bms_thermal_seen||0);
-
-  if(d.test){
-    pill('apReady',!!d.test.ap_ready,d.test.ap_ready?'Ready':'Not Ready');
-    var dl=document.getElementById('detLimit');
-    if(dl)dl.innerHTML=speedText(d.test.speed_limit_kph||0,!!d.test.speed_limit_seen,d.test.speed_limit_source||'');
-    var cs=document.getElementById('cruiseSet');
-    if(cs)cs.innerHTML=speedText(d.test.cruise_set_speed_kph||0,!!d.test.cruise_set_speed_seen,'set');
-    var s40=document.getElementById('btnSet40');
-    if(s40){
-      s40.disabled=false;
-      s40.title=d.test.cruise_set_speed_seen?'Overrides the next live 0x2B9 frames':'Arms override and waits for live 0x2B9';
-    }
-  }
 
   // OTA banner
   var otaB=document.getElementById('otaBanner');
@@ -987,7 +942,6 @@ function cmd(c,v){
   }
 }
 function toggleMode(){ cmd('mode',null); }
-function testAction(a){ cmd('test_action',a); }
 
 function logInfo(text,color){
   var e=document.getElementById('httpLogInfo');
@@ -1257,15 +1211,6 @@ static String build_json() {
         (state.hw_version == TeslaHW_HW3) ? "HW3: DAS 0x399" :
         (state.hw_version == TeslaHW_Legacy) ? "Legacy: DAS 0x399" :
         "Waiting for HW detection";
-    const char *speed_limit_source = "none";
-    switch (state.speed_limit_source) {
-        case SpeedLimitSource_Map:    speed_limit_source = "map"; break;
-        case SpeedLimitSource_Vision: speed_limit_source = "vision"; break;
-        case SpeedLimitSource_Acc:    speed_limit_source = "acc"; break;
-        case SpeedLimitSource_None:
-        default: break;
-    }
-
     j.reserve(1700);
     j  = "{";
     j += "\"fsd_enabled\":";   j += state.fsd_enabled                 ? "true" : "false"; j += ',';
@@ -1316,13 +1261,6 @@ static String build_json() {
     j += "\"dropped\":";      j += http_can_stream_frames_dropped();   j += ',';
     j += "\"filtered\":";     j += http_can_stream_frames_filtered();  j += ',';
     j += "\"buffered\":";     j += http_can_stream_buffered_frames();  j += "},";
-    j += "\"test\":{";
-    j += "\"ap_ready\":";        j += state.ap_ready                   ? "true" : "false"; j += ',';
-    j += "\"speed_limit_seen\":"; j += state.speed_limit_seen          ? "true" : "false"; j += ',';
-    j += "\"speed_limit_kph\":";  j += String(state.speed_limit_kph, 1); j += ',';
-    j += "\"speed_limit_source\":\""; j += speed_limit_source;          j += "\",";
-    j += "\"cruise_set_speed_seen\":"; j += state.cruise_set_speed_seen ? "true" : "false"; j += ',';
-    j += "\"cruise_set_speed_kph\":";  j += String(state.cruise_set_speed_kph, 1); j += "},";
     j += "\"ota_partition\":"; j += ota_part;
     j += '}';
     return j;
@@ -1535,21 +1473,6 @@ static void ws_event(uint8_t num, WStype_t type,
                 state_exit();
                 prefs_save(&saved);
             }
-        }
-    } else if (strstr(buf, "\"test_action\"")) {
-        TestActionRequest action = TestAction_None;
-        if (strstr(buf, "\"wheel_short\"")) {
-            action = TestAction_RightWheelShort;
-        } else if (strstr(buf, "\"wheel_burst\"")) {
-            action = TestAction_RightWheelBurst;
-        } else if (strstr(buf, "\"set_40\"")) {
-            action = TestAction_SetCruise40;
-        }
-        if (action != TestAction_None) {
-            state_enter();
-            g_state->test_action_request = action;
-            g_state->test_action_seq++;
-            state_exit();
         }
     } else if (strstr(buf, "\"wifi_cfg\"")) {
         // Find the "value":{ object start

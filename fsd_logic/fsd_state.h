@@ -20,13 +20,6 @@ typedef enum {
     SpeedLimitSource_Acc,
 } SpeedLimitSource;
 
-typedef enum {
-    TestAction_None = 0,
-    TestAction_RightWheelShort,
-    TestAction_RightWheelBurst,
-    TestAction_SetCruise40,
-} TestActionRequest;
-
 typedef struct FSDState {
     TeslaHWVersion hw_version;
     int speed_profile;
@@ -236,8 +229,6 @@ typedef struct FSDState {
     float map_speed_limit_kph;
     float vision_speed_limit_kph;
     float acc_speed_limit_kph;
-    TestActionRequest test_action_request;
-    uint32_t test_action_seq;
 
     // T-Display (ESP32 BOARD_TTGO_DISPLAY); kept unconditionally so the struct
     // layout is identical across boards.
