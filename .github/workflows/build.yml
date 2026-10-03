@@ -61,6 +61,7 @@ jobs:
       matrix:
         env:
           - m5stack-atom
+          - m5stack-atom-matrix
           - m5stack-atom-swap-pins
           - esp32-mcp2515
           - esp32-lilygo
@@ -88,12 +89,16 @@ jobs:
         working-directory: esp32
         run: |
           mkdir -p out
+          # App-only image — for the in-device OTA updater (dashboard upload).
           cp ".pio/build/${{ matrix.env }}/firmware.bin" "out/tesla-fsd-${{ matrix.env }}.bin"
-          test -f ".pio/build/${{ matrix.env }}/firmware.bin"
+          # Full-flash merged image (offset 0) — for the browser flasher on a blank board.
+          cp ".pio/build/${{ matrix.env }}/firmware-merged.bin" "out/tesla-fsd-${{ matrix.env }}-merged.bin"
+          test -f "out/tesla-fsd-${{ matrix.env }}.bin"
+          test -f "out/tesla-fsd-${{ matrix.env }}-merged.bin"
       - uses: actions/upload-artifact@v4
         with:
           name: esp32-${{ matrix.env }}
-          path: esp32/out/tesla-fsd-${{ matrix.env }}.bin
+          path: esp32/out/*.bin
           if-no-files-found: error
 
   release:
@@ -102,6 +107,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -111,6 +117,9 @@ jobs:
           mkdir -p release
           find artifacts -name '*.fap' -exec cp {} release/ \;
           find artifacts -name '*.bin' -exec cp {} release/ \;
+          # Self-contained browser flasher — download it and open in Chrome/Edge
+          # to flash without hosting anything.
+          cp docs/install/index.html release/tesla-flasher.html
           ls -la release
       - name: Upload to release
         env:

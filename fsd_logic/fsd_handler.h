@@ -24,7 +24,6 @@
 #define CAN_ID_VCRIGHT_STATUS 0x343  // 835  - VCRIGHT_status (rear defrost state)
 #define CAN_ID_DI_SPEED       0x257  // 599  - DI_speed (vehicle speed, checksummed)
 #define CAN_ID_ESP_STATUS     0x145  // 325  - ESP_status (brake, stability)
-#define CAN_ID_GTW_EPAS_CTRL  0x101  // 257  - GTW_epasControl (steering tune WRITE, Chassis CAN)
 #define CAN_ID_DAS_STATUS     0x39B  // 923  - DAS_status (HW4 + Highland HW3; AP state, nag, lane change, blind spot)
 #define CAN_ID_DAS_STATUS_HW3 0x399  // 921  - DAS_status (pre-Highland HW3 / Legacy, same ID as HW4 ISA chime — HW-dependent meaning)
 #define CAN_ID_DAS_STATUS2    0x389  // 905  - DAS_status2 (ACC report, driver interaction)
@@ -48,6 +47,8 @@
 // TeslaHWVersion, OpMode, and FSDState are defined in the shared headers
 // (fsd_types.h / fsd_state.h) so both the Flipper and ESP32 builds use one copy.
 #include "fsd_state.h"
+// DAS engaged helper + in-car Autopark TX pause (#180), shared header-only.
+#include "fsd_autopark.h"
 
 void fsd_state_init(FSDState* state, TeslaHWVersion hw);
 void fsd_set_bit(CANFRAME* frame, int bit, bool value);
@@ -55,15 +56,28 @@ uint8_t fsd_read_mux_id(const CANFRAME* frame);
 bool fsd_is_selected_in_ui(const CANFRAME* frame, bool force_fsd);
 TeslaHWVersion fsd_detect_hw_version(const CANFRAME* frame);
 
-// AP-First stability debounce: AP must hold das_ap_state >= 2 for at least this
-// long before injection is allowed, to avoid injecting on the activation edge
-// (the steer-jerk window). Mirrors ev-open-can-tools v3.0.2-beta.2 (1 s).
+// DAS_autopilotState engaged threshold. Standard DAS_autopilotState enum:
+// 2=AVAILABLE (AP offered / NOT engaged), 3=ACTIVE_NOMINAL (first genuinely
+// engaged state), 6=active, 8/9=aborting/aborted. So >= 3 means AP is actually
+// engaged; 2 merely means it is available. Confirmed vs the #108 black-box
+// capture (AP OFF bounced 1<->2 while a real engage went 2->3->6 and held at 6).
+#define DAS_APSTATE_ENGAGED 3u
+
+// AP-First stability debounce: AP must hold das_ap_state >= DAS_APSTATE_ENGAGED
+// for at least this long before injection is allowed, to avoid injecting on the
+// activation edge (the steer-jerk window). Mirrors ev-open-can-tools v3.0.2-beta.2 (1 s).
 #define AP_FIRST_STABLE_MS 1000u
 
+// Minimal Inject (#108): when ap_first_minimal is on, only this many AP-enable
+// frames are modified at the start of each engagement, then injection stops until
+// the car disengages. This moves injection to engage onset and off the later abort
+// edge (the steer-jerk window). A few frames reliably trigger FSD; tunable.
+#define AP_MINIMAL_INJECT_FRAMES 5u
+
 /** AP-First gate. Returns true if injection is permitted right now: either
- *  AP-First is off, or AP is engaged (das_ap_state >= 2) and has been stable for
- *  >= AP_FIRST_STABLE_MS. now_ms is a millisecond clock; ap_unstable_tick_ms is
- *  stamped by the caller whenever das_ap_state < 2. */
+ *  AP-First is off, or AP is engaged (das_ap_state >= DAS_APSTATE_ENGAGED) and has
+ *  been stable for >= AP_FIRST_STABLE_MS. now_ms is a millisecond clock;
+ *  ap_unstable_tick_ms is stamped by the caller whenever das_ap_state < ENGAGED. */
 bool fsd_ap_first_allows(const FSDState* state, uint32_t now_ms);
 
 // Soft Engage: |steering angle| must be within this of centre before the
@@ -73,8 +87,22 @@ bool fsd_ap_first_allows(const FSDState* state, uint32_t now_ms);
 /** Soft-Engage gate. Returns true if injection may proceed: soft_engage off, or
  *  already latched this engagement, or the wheel is within SOFT_ENGAGE_ANGLE_DEG
  *  of centre (which latches it on). Mutates soft_engage_latched. Reset the latch
- *  (soft_engage_latched=false) when AP drops (das_ap_state < 2). */
+ *  (soft_engage_latched=false) when AP drops (das_ap_state < DAS_APSTATE_ENGAGED). */
 bool fsd_soft_engage_allows(FSDState* state);
+
+// Abort Guard (#108): DAS_autopilotState values that mean the car is aborting an
+// engage — the moment linked to the steer-jerk in dunckencn's logs.
+#define DAS_APSTATE_ABORTING 8u
+#define DAS_APSTATE_ABORTED  9u
+
+/** Abort-Guard latch maintenance. Call once per RX frame (after das_ap_state is
+ *  updated). When abort_guard is on: sets abort_guard_latched on an abort state
+ *  (8/9), clears it on a clean disengage (das_ap_state < DAS_APSTATE_ENGAGED). No-op when off. */
+void fsd_abort_guard_update(FSDState* state);
+
+/** Abort-Guard gate. Returns false (suppress injection) only when abort_guard is
+ *  on AND an abort was latched this engagement; true otherwise. */
+bool fsd_abort_guard_allows(const FSDState* state);
 
 void fsd_handle_follow_distance(FSDState* state, const CANFRAME* frame);
 bool fsd_handle_autopilot_frame(FSDState* state, CANFRAME* frame, uint32_t now_ms);
@@ -82,6 +110,33 @@ bool fsd_handle_autopilot_frame(FSDState* state, CANFRAME* frame, uint32_t now_m
 void fsd_handle_legacy_stalk(FSDState* state, const CANFRAME* frame);
 bool fsd_handle_legacy_autopilot(FSDState* state, CANFRAME* frame, uint32_t now_ms);
 bool fsd_handle_isa_speed_chime(CANFRAME* frame);
+
+// Nag burst/pause (#122): echo for NAG_BURST_MS then rest for NAG_PAUSE_MS. The
+// rest period is the believed reason a TSL6P-style device evades stricter 14.x
+// detection (continuous injection trips it). Values mirror the in-the-wild device.
+#define NAG_BURST_MS 1000u
+#define NAG_PAUSE_MS 1500u
+
+// Nag torque hard cap: ±1.8 Nm (raw 1870..2230, centre 2050). Going over ±1.8 Nm
+// has been reported to trigger FSD disengagements during turns (#122) — applies
+// to every nag path (legacy grip pulses + EPAS-faithful ramp).
+#define NAG_TORQUE_RAW_MAX 2230
+#define NAG_TORQUE_RAW_MIN 1870
+
+// Configurable signal-mapping context freshness (#122): when a custom DAS source
+// is set, the nag killer refuses to inject if that frame hasn't been seen within
+// this window — so a wrong/absent mapping fails to a clean no-op, not misbehaviour.
+#define NAG_CTX_FRESH_MS 1000u
+
+/** Apply the configurable signal mapping (#122): if cfg_das_id / cfg_steer_id are
+ *  set and this frame matches, extract das_ap_state / das_hands_on_state /
+ *  steering_angle_deg from the configured positions and stamp the freshness clock.
+ *  No-op when the corresponding id is 0 (auto mode). Call from the RX path. */
+void fsd_apply_signal_config(FSDState* state, const CANFRAME* frame, uint32_t now_ms);
+
+/** True if the DAS context is fresh enough to inject: always true in auto mode
+ *  (cfg_das_id == 0), else requires a cfg-DAS frame within NAG_CTX_FRESH_MS. */
+bool fsd_das_ctx_fresh(const FSDState* state, uint32_t now_ms);
 
 /** Handle CAN ID 0x370 - EPAS nag killer (counter+1 echo).
  *  Builds a new frame in out_frame. Returns true if should be sent.
@@ -150,12 +205,6 @@ void fsd_handle_epas_steering_mode(FSDState* state, const CANFRAME* frame);
  *  ESP_driverBrakeApply: bit29|2.
  *  Source: opendbc tesla_model3_party.dbc. */
 void fsd_handle_esp_status(FSDState* state, const CANFRAME* frame);
-
-/** Build a GTW_epasControl (0x101) frame to set steering tune mode.
- *  GTW_epasTuneRequest: startBit 2, 3 bits (1=comfort 2=standard 3=sport).
- *  Source: tuncasoftbildik TESLA_CAN_STEERING_REFERENCE.md.
- *  NOTE: This is on CHASSIS CAN, not Party CAN — requires different tap. */
-void fsd_build_steering_tune_frame(CANFRAME* frame, uint8_t mode);
 
 /** Parse DAS_status (0x39B) — AP hands-on state, lane change, blind spot,
  *  FCW, vision speed limit. All Party CAN, read-only.

@@ -56,6 +56,8 @@ static void fsd_update_display(TeslaFSDApp* app, uint32_t uptime_ms) {
     char line2[44];
     if(state.tesla_ota_in_progress) {
         snprintf(line2, sizeof(line2), "OTA — TX paused [%s]", mode_str);
+    } else if(state.autopark_tx_block) {
+        snprintf(line2, sizeof(line2), "Autopark — TX pause [%s]", mode_str);
     } else {
         snprintf(line2, sizeof(line2), "FSD: %s  Nag: %s [%s]",
             state.fsd_enabled ? "ON" : "WAIT",
@@ -123,6 +125,7 @@ static int32_t fsd_running_worker(void* context) {
     state.suppress_speed_chime = app->suppress_speed_chime;
     state.emergency_vehicle_detect = app->emergency_vehicle_detect;
     state.nag_killer = app->nag_killer;
+    state.nag_burst = app->nag_burst;
     state.nag_epas_faithful = app->nag_epas_faithful;
     state.precondition = app->precondition;
     state.op_mode = app->op_mode;
@@ -130,7 +133,6 @@ static int32_t fsd_running_worker(void* context) {
     state.extra_hazard_lights = app->extra_hazard_lights;
     state.extra_wiper_off = app->extra_auto_wipers_off;
     state.extra_park_inject = false;
-    state.extra_steering_mode = app->extra_steering_mode;
     state.extra_highbeam_strobe = app->extra_highbeam_strobe;
     state.extra_turn_left = app->extra_turn_left;
     state.extra_turn_right = app->extra_turn_right;
@@ -142,6 +144,8 @@ static int32_t fsd_running_worker(void* context) {
     state.gtw_shield_armed = false;
     state.tlssc_restore = app->tlssc_restore;
     state.ap_first = app->ap_first;
+    state.ap_first_edge = app->ap_first_edge;
+    state.ap_first_minimal = app->ap_first_minimal;
     state.soft_engage = app->soft_engage;
     state.gtw_tier_override = app->gtw_tier_override;
     state.scroll_press_ap = app->scroll_press_ap;
@@ -155,6 +159,9 @@ static int32_t fsd_running_worker(void* context) {
     state.assist_show_lane_graph = app->assist_show_lane_graph;
     state.assist_tlssc_bit38 = app->assist_tlssc_bit38;
     state.assist_telemetry_off = app->assist_telemetry_off;
+    // DAS AP/hands-on read location preset (fsd_state_init cleared cfg_* on HW
+    // select, so re-apply the chosen mapping here).
+    signal_map_apply(&state, app->signal_map);
     furi_mutex_release(app->mutex);
 
     // Listen-only mode → MCP2515 hardware listen-only register
@@ -224,10 +231,14 @@ static int32_t fsd_running_worker(void* context) {
 
         // AP-first stability debounce: stamp the last moment AP was not engaged,
         // so fsd_ap_first_allows() can require AP to hold stable before injecting.
-        if(state.das_ap_state < 2) {
+        // < DAS_APSTATE_ENGAGED (3): AVAILABLE(2) is not engaged, so the window
+        // measures time held at 3+, and a drop to AVAILABLE re-requires a centred wheel.
+        if(state.das_ap_state < DAS_APSTATE_ENGAGED) {
             state.ap_unstable_tick_ms = now;
             state.soft_engage_latched = false;  // re-require centred wheel next engage (#108)
+            state.ap_inject_count = 0;          // re-arm Minimal Inject burst next engage (#108)
         }
+        fsd_abort_guard_update(&state);  // latch off injection if the car aborts (#108)
         if((now - last_err_check) >= furi_ms_to_ticks(250)) {
             uint8_t eflg = get_error(mcp);
             // EFLG bits 0/1 = RX0/RX1 overflow, bit 4 = receive error warn,
@@ -337,6 +348,7 @@ static int32_t fsd_running_worker(void* context) {
                 }
                 else if(frame.canId == CAN_ID_DI_SPEED) {
                     fsd_handle_di_speed(&state, &frame);
+                    state.last_speed_tick_ms = now; // freshness for the Autopark release gate (#180)
                 }
                 else if(frame.canId == CAN_ID_ESP_STATUS) {
                     fsd_handle_esp_status(&state, &frame);
@@ -372,7 +384,8 @@ static int32_t fsd_running_worker(void* context) {
                     }
                 }
 
-                // Track Mode inject (Service mode only, 0x313)
+                // Track Mode inject (0x313) — adjustable balance/stability/cooling,
+                // gated by the master opt-in inside the handler
                 if(frame.canId == CAN_ID_TRACK_MODE_SET) {
                     if(fsd_handle_track_mode_inject(&state, &frame) && tx_allowed) {
                         send_can_frame(mcp, &frame);
@@ -456,6 +469,18 @@ static int32_t fsd_running_worker(void* context) {
                         send_can_frame(mcp, &frame);
                     }
                 }
+
+                // Signal Map override: when a non-Auto preset is selected, relocate
+                // the DAS AP/hands-on read to the configured byte (per-car 0x39B/0x399
+                // layouts). No-op when cfg_das_id == 0. Runs after the standard
+                // parsers so the override wins; stamps das_ctx_seen_ms for the
+                // nag killer's freshness gate on the worker clock.
+                fsd_apply_signal_config(&state, &frame, now);
+
+                // In-car Autopark TX pause (#180): after the DAS/speed frames are
+                // parsed, maintain the episode + block so fsd_can_transmit() gates
+                // every TX path during an Autopark run.
+                fsd_autopark_update(&state, now);
 
                 if((now - last_display) >= furi_ms_to_ticks(FSD_DISPLAY_REFRESH_MS)) {
                     furi_mutex_acquire(app->mutex, FuriWaitForever);

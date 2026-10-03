@@ -10,6 +10,8 @@ dist/
 __pycache__/
 *.pyc
 
-# host unit-test binary (test/Makefile)
+# host unit-test binaries (test/Makefile)
 test/test_fsd_core
+test/test_esp32_core
 *.dSYM/
+/.vs

@@ -22,6 +22,11 @@ typedef enum {
 
 typedef struct FSDState {
     TeslaHWVersion hw_version;
+    // Manual HW selection (#110). TeslaHW_Unknown = auto-detect (default); any
+    // other value pins hw_version and makes auto-detection a no-op. For taps that
+    // carry no 0x398 (many Model 3 / Model Y) detection can only guess, so let an
+    // owner who knows their car say so instead of guessing harder.
+    TeslaHWVersion hw_override;
     int speed_profile;
     int speed_offset;
     bool fsd_enabled;
@@ -33,6 +38,9 @@ typedef struct FSDState {
     bool suppress_speed_chime;
     bool emergency_vehicle_detect;
     bool nag_killer;           // CAN 880 counter echo method
+    bool nag_burst;            // burst/pause echo (~1s on / ~1.5s off) — the rest
+                               // period is what lets a TSL6P-style device evade the
+                               // stricter 14.x detector (#122). Off by default.
     bool nag_epas_faithful;    // v2.17 experimental: mirror the in-the-wild 0x370
                                // scheme (no handsOnLevel flip; torque centred at
                                // 0 Nm with live variance) to pass the 2026.14.x
@@ -60,6 +68,19 @@ typedef struct FSDState {
 
     // --- extras: read-only vehicle state (parsed from bus) ---
     uint8_t track_mode_state;    // 0=unavail 1=avail 2=on (from 0x118)
+
+    // --- Track Mode inject (0x313 UI_trackModeSettings, opt-in adjustable) ---
+    // Modify the car's own 0x313 broadcast: request ON + handling balance,
+    // stability assist and cooling, then recompute the additive checksum. The
+    // byte6 counter is left untouched (we edit the car's frame in place). Master
+    // opt-in only — not gated on trim or the read-back track_mode_state, because
+    // the enable request works on non-Performance trims too.
+    bool track_mode_inject;      // master opt-in, default OFF
+    uint8_t track_rotation_pct;  // Handling Balance 0-100 (low=understeer/stable, high=oversteer/rotation); default 100 (rear-biased / RWD-like)
+    uint8_t track_stability_pct; // Stability Assist 0-100; default 30 (safety margin + fun)
+    bool track_post_cooling;     // UI_trackPostCooling, default false
+    bool track_cmp_overclock;    // UI_trackCmpOverclock (max cooling), default false
+
     uint8_t traction_ctrl_mode;  // 0..7 (from 0x118)
     uint8_t rear_defrost_state;  // 0=sna 1=on 2=off (from 0x343)
     float vehicle_speed_kph;     // from 0x257 DI_vehicleSpeed (12-bit, 0.08 factor, -40 offset)
@@ -75,8 +96,32 @@ typedef struct FSDState {
 
     // --- AP-first mode (2026.14.x compatibility) ---
     bool ap_first;               // delay 0x3FD/0x3EE injection until AP is engaged AND stable
-    uint8_t das_ap_state;        // DAS_autopilotState: 0=UNAVAIL 1=AVAIL 2=ACTIVE_NOMINAL 3+=active
-    uint32_t ap_unstable_tick_ms;// ms clock when das_ap_state was last < 2 (AP-first stability debounce)
+    bool ap_first_edge;          // experimental "Instant Engage": inject as soon as AP is
+                                 // engaged, skipping the AP_FIRST_STABLE_MS debounce. Off by default.
+    bool ap_first_minimal;       // experimental "Minimal Inject": limit the AP-enable frame
+                                 // injection to a brief burst at engage, then stop until the
+                                 // car disengages — keeps injection off the abort edge (#108). Off by default.
+    uint8_t ap_inject_count;     // AP-enable frames modified this engagement (Minimal Inject burst budget;
+                                 // reset to 0 on disengage, das_ap_state < DAS_APSTATE_ENGAGED)
+    uint8_t das_ap_state;        // DAS_autopilotState (byte0 low nibble on 0x39B/0x399):
+                                 // 0=DISABLED 1=UNAVAILABLE 2=AVAILABLE (offered, NOT engaged)
+                                 // 3=ACTIVE_NOMINAL (first engaged) 4=ACTIVE_RESTRICTED 5=ACTIVE_NAV
+                                 // 6=ACTIVE_FSD (also steady engaged on newer fw) 8=ABORTING
+                                 // 9=ABORTED 14=FAULT 15=SNA. Engaged = 3..6.
+    uint32_t ap_unstable_tick_ms;// ms clock when das_ap_state was last < DAS_APSTATE_ENGAGED (AP-first stability debounce)
+
+    // --- Shared event-core bookkeeping (#123, fsd_events.h) ---
+    // Per-instance state for fsd_events_poll() / fsd_events_inject(): detects
+    // das_ap_state transitions and rate-limits each event type. No statics, so
+    // the detector is host-testable and re-entrant.
+    // FSD_EVENT_COUNT must match the FSDEventType enum in fsd_events.h, which
+    // can't be included here without a cycle; fsd_events.h _Static_asserts it.
+#define FSD_EVENT_COUNT 5
+    uint8_t  evt_prev_ap_state;                      // das_ap_state at the previous poll (transition source)
+    uint32_t evt_cooldown_until_ms[FSD_EVENT_COUNT]; // per-type cooldown expiry, indexed by FSDEventType
+    uint8_t  evt_last_from;                          // last emitted event: from-state
+    uint8_t  evt_last_to;                            // last emitted event: to-state
+    uint32_t evt_last_ms;                            // last emitted event: timestamp (now_ms)
 
     // --- Soft Engage (steer-jerk mitigation, #108) ---
     // Hold the activation-edge injection until the wheel is near-centred, so the
@@ -86,11 +131,40 @@ typedef struct FSDState {
     bool soft_engage;            // opt-in toggle
     bool soft_engage_latched;    // true once activation has begun this engagement
 
+    // --- Abort Guard (steer-jerk mitigation, #108) ---
+    // On some cars the DAS engages then ABORTS within ~0.5s (DAS_autopilotState
+    // 8/9), and that abort snaps the wheel — the steer-jerk. Root-caused from
+    // dunckencn's logs: injected 0x3EE is byte-identical in jerk vs clean runs;
+    // only the jerk runs reach the abort states. When on, cut all activation
+    // injection the instant the car enters an abort state and latch off until a
+    // clean disengage (das_ap_state < DAS_APSTATE_ENGAGED), so we never feed/repeat an in-progress
+    // abort. Off by default; experimental, needs on-car validation.
+    bool abort_guard;            // opt-in toggle
+    bool abort_guard_latched;    // true once an abort was seen this engagement
+
     // --- Scroll-Press AP Engage (0x3C2 VCLEFT_switchStatus, HW4-only, Service mode) ---
     bool scroll_press_ap;            // user toggle
     uint8_t scroll_press_state;      // 0=idle/armed-track, 1=press1, 2=scroll1, 3=press2, 4=scroll-final, 5=cooldown
     bool scroll_press_armed;         // true once das_ap_state==0 observed (required before each fire)
     uint32_t scroll_press_phase_ms;  // now_ms at the start of the current phase (timing reference)
+
+    // --- Configurable nag-context signal mapping (#122) ---
+    // When cfg_das_id != 0, the RX path reads DAS_autopilotState + handsOnState
+    // from these positions instead of the auto-detected parser — lets users with
+    // non-standard 0x39B/0x399 layouts (per-car variants, e.g. byte0 vs byte1)
+    // point the killer at the right bytes without per-car firmware fallbacks.
+    uint16_t cfg_das_id;          // DAS frame id (0 = auto-detect)
+    uint8_t  cfg_apstate_byte;    // DAS_autopilotState position
+    uint8_t  cfg_apstate_shift;
+    uint8_t  cfg_apstate_mask;
+    uint8_t  cfg_handson_byte;    // DAS_handsOnState position (same frame)
+    uint8_t  cfg_handson_shift;
+    uint8_t  cfg_handson_mask;
+    uint16_t cfg_steer_id;        // steering frame id (0 = auto, default 0x129)
+    uint8_t  cfg_steer_hi;        // steering angle byte high / low (signed LE, *0.1)
+    uint8_t  cfg_steer_lo;
+    uint32_t das_ctx_seen_ms;     // last cfg-DAS update (freshness gate)
+    uint32_t steer_ctx_seen_ms;   // last cfg-steering update
 
     // --- DAS state (from 0x39B / 0x389 — Party CAN, read-only) ---
     uint8_t das_hands_on_state;  // 0-15 (4-bit nag level from DAS, more precise than EPAS 2-bit)
@@ -108,14 +182,17 @@ typedef struct FSDState {
                                  // (gate for the 0x399 hands-on fallback on HW4 trims
                                  //  that never broadcast 0x39B, e.g. Juniper RWD on Bus 6)
 
-    // --- HW4 0x39B byte0 AP-state auto-fallback (#116) ---
-    // Highland (China MIC, fw 2026.20) ships an 8-byte HW4 0x39B but carries
-    // DAS_autopilotState in byte0 low nibble (HW3 position) while byte1[7:4] is
-    // pinned at 1 the whole drive. Detect that signature and latch this car to the
-    // byte0 reading for the session (re-detected each power cycle via memset init).
-    uint8_t das_hw4_byte0_pin_count; // consecutive (byte1[7:4]==1 && byte0>=2) frames
-    bool das_hw4_byte1_moved;        // sticky: byte1[7:4] ever seen != 1 (standard HW4)
-    bool das_hw4_use_byte0;          // one-way latch: read AP-state from byte0 low nibble
+    // --- In-car Autopark TX pause (#180, fsd_autopark.h) ---
+    // Highland runs in-car Autopark at DAS_autopilotState 6 with the autopark
+    // bits set in 0x39B/0x399 byte3 bits0-2. Injecting during that window throws
+    // AEB/traction/stability/regen warnings, so all TX pauses for the episode.
+    bool autopark_ready;             // byte3 bit0 DAS_autoparkReady
+    bool autopark_parked;            // byte3 bit1 DAS_autoParked
+    bool autopark_waiting_brake;     // byte3 bit2 DAS_autoparkWaitingForBrake
+    uint32_t autopark_maneuver_last_ms; // ms clock a maneuver bit (autoParked / waitingForBrake) was last seen set
+    uint8_t autopark_prev_ap_state;  // das_ap_state at the previous fsd_autopark_update
+    bool autopark_episode;           // inside a detected Autopark episode (state 6)
+    bool autopark_tx_block;          // episode AND not confirmed driving -> pause every TX
 
     // --- GTW autopilot tier (from 0x7FF mux=2 on mixed bus) ---
     int8_t gtw_autopilot_tier;   // -1 = not yet read
@@ -128,6 +205,17 @@ typedef struct FSDState {
 
     // --- upstream feature flags ---
     bool enhanced_autopilot;     // when true, mux=1 also sets bit46 (EAP/summon)
+    // Summon EU Unlock (ev-open-can-tools summon-eu-unlock): 0x3FD mux1 clears
+    // bit19 (EU summon restriction) and sets bit47 (summon enable), on HW3 + HW4.
+    // Opt-in, default OFF. // TODO: add Summon EU Unlock to Flipper menu
+    bool summon_unlock;
+    // AP branch/tier selector (0x3FD DAS_autopilotControl mux1, UI_apmv3Branch,
+    // bits 40-42 = byte5 bits 0-2). Enum: 0=LIVE 1=STAGE 2=DEV 3=STAGE2 4=EAP
+    // 5=DEMO. Opt-in, default OFF (0xFF sentinel = don't touch). Experimental and
+    // non-persistent: writing this only changes which AP software branch/tier the
+    // UI presents while injection is live; it reverts the instant injection stops.
+    // Real-world effect is unverified.
+    uint8_t apmv3_branch;
     bool speed_profile_locked;   // when true, follow distance won't override profile
     uint8_t hw4_offset;          // HW4 mux=2 speed offset override (0 = no override)
 
@@ -172,13 +260,21 @@ typedef struct FSDState {
     bool assist_hands_off;       // bit14: UI-level hands-on disable
     bool assist_dev_mode;        // bit5: UI_dasDeveloper flag
     bool assist_lhd_override;    // bit40-41: force left-hand drive
+    bool assist_rhd_override;    // bit41 UI_drivingSide = RHD; opt-in, default OFF; mutually exclusive with LHD override
 
     // --- 0x3FD mux1 extras ---
     bool assist_show_lane_graph; // bit45: lane visualization on non-FSD tier
     bool assist_tlssc_bit38;     // bit38 on mux0: explicit TLSSC enable (complementary to 0x331)
+    bool continue_on_green;      // bit39 on mux0 (UI_fsdContinueOnGreenWithCIPV): continue through a green light behind a lead car without stalk confirm; opt-in, default OFF, pairs with TLSSC/bit38
 
-    // --- telemetry disable (0x3F8 bit43) ---
-    bool assist_telemetry_off;   // force UI_enableTripTelemetry=0
+    // --- Telemetry Off (experimental, opt-in, default OFF) ---
+    // Clears the telemetry/logging flags this tool can REACH on the buses it taps:
+    //   0x3F8 UI_driverAssistControl bits 19/42/43/44/55 (clip/trip/road-segment)
+    //   0x3FD DAS_autopilotControl mux1 bits 48/50 (cabin-camera / China AP telemetry)
+    // These are plain bit-clears (no checksum). This is a REACHABLE SUBSET only —
+    // it does NOT touch Vehicle-bus ECU log-upload frames and does NOT guarantee
+    // reduced detection. See the omission notes in fsd_handler.c.
+    bool assist_telemetry_off;
 
     // --- energy consumption (0x33A, read-only) ---
     float energy_wh_per_km;
@@ -188,7 +284,6 @@ typedef struct FSDState {
     bool extra_hazard_lights;
     bool extra_wiper_off;
     bool extra_park_inject;      // inject a PARK stalk press
-    uint8_t extra_steering_mode; // 0=no change, 1=comfort 2=standard 3=sport (GTW_epasTuneRequest)
     bool extra_highbeam_strobe;   // rapid PULL/IDLE toggle on SCCM_leftStalk
     bool extra_turn_left;         // inject left turn signal
     bool extra_turn_right;        // inject right turn signal
@@ -202,11 +297,15 @@ typedef struct FSDState {
 
     bool ignore_ota;             // allow TX while Tesla OTA is detected
     bool china_mode;             // bypass FSD UI selection check for China vehicles
+    bool signal_map_das_missing; // ESP32: a configured Signal Map DAS id never showed
+                                 // up on the tapped bus -> nag killer silently paused (#100)
 
-    // OTA detection debounce (from 0x318)
+    // OTA detection debounce (from 0x318) — used by both builds via fsd_ota.h
     uint8_t ota_raw_state;       // raw GTW_updateInProgress bits [1:0]
     uint8_t ota_assert_count;    // consecutive "in-progress" samples
     uint8_t ota_clear_count;     // consecutive "not in-progress" samples
+    uint8_t ota_last_byte6;      // previous 0x318 byte6 (flag vs rolling counter)
+    bool ota_last_valid;         // ota_last_byte6 holds a real sample
 
     // per-ID seen counters (wiring/diagnostics)
     uint32_t seen_gtw_car_state; // 0x318
@@ -228,6 +327,10 @@ typedef struct FSDState {
 
     // 2026.14.x firmware warning (persisted in NVS on ESP32)
     bool firmware_14x_warning;
+
+    // Black-box incident recorder (#124, persisted in NVS on ESP32). Default ON.
+    // Auto-records full-rate CAN around aborts / bus-off / manual marks.
+    bool blackbox_enabled;
 
     // DAS_status fields parsed by the ESP32 handler
     uint8_t das_speed_limit_1;
